@@ -81,7 +81,6 @@ class Character:
         return self.rays
 
     """SETTERS"""
-
     def move_in_direction(self, direction):
         original_pos = self.rect.topleft
         move_x = 0
@@ -333,7 +332,6 @@ class Character:
         return True
 
     def update_tick(self):
-        # Increment the tick counter
         self.current_tick += 1
 
     def draw(self, screen):
