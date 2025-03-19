@@ -18,7 +18,7 @@ def main():
     world_height = 1280
     display_width = 800
     display_height = 800
-    n_of_obstacles  = 25
+    n_of_obstacles  = 15
 
     load_back = True
     state_size = 38  # Updated state size: 34 base + 2 for relative position + 2 for time features

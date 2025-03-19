@@ -49,8 +49,8 @@ class MyBot:
         self.priority_probabilities = deque(maxlen=50000)  # And for priorities
         self.gamma = 0.99
         self.epsilon = 1.0
-        self.epsilon_min = 0.01
-        self.epsilon_decay = 0.995  # Slower decay for better exploration
+        self.epsilon_min = 0.2
+        self.epsilon_decay = 0.99995  # Slower decay for better exploration
         self.learning_rate = 0.0001  # Reduced learning rate for stability
         self.batch_size = 64  # Reduced batch size for more stable learning
         self.min_memory_size = 1000  # Reduced minimum memory size for faster start
