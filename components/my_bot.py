@@ -10,31 +10,16 @@ import random
 class ImprovedDQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(ImprovedDQN, self).__init__()
-        # Separate networks for different input types
-        self.location_net = nn.Sequential(
-            nn.Linear(2, 32),
-            nn.ReLU()
-        )
+        # Simplified architecture with fewer layers and neurons
+        # Process all inputs together for better efficiency
 
-        self.status_net = nn.Sequential(
-            nn.Linear(2, 32),  # rotation and ammo
-            nn.ReLU()
-        )
-
-        self.ray_net = nn.Sequential(
-            nn.Linear(30, 128),  # 5 rays * 6 features
+        # First layer processes location and status
+        self.input_net = nn.Sequential(
+            nn.Linear(34, 128),  # All inputs combined
             nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU()
-        )
-
-        # Combine all features
-        self.combined_net = nn.Sequential(
-            nn.Linear(128, 256),  # 32 + 32 + 64 = 128
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, output_dim)
+            nn.Linear(128, output_dim)
         )
 
         # Initialize weights using Xavier initialization
@@ -44,28 +29,31 @@ class ImprovedDQN(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, state_dict):
-        # Process different parts of the state separately
-        loc = self.location_net(state_dict['location'])
-        status = self.status_net(state_dict['status'])
-        rays = self.ray_net(state_dict['rays'])
+        # Combine all inputs into a single tensor
+        location = state_dict['location']
+        status = state_dict['status']
+        rays = state_dict['rays']
 
-        # Combine all features
-        combined = torch.cat([loc, status, rays], dim=1)
-        return self.combined_net(combined)
+        # Concatenate all inputs
+        combined = torch.cat([location, status, rays], dim=1)
+
+        # Process through the network
+        return self.input_net(combined)
 
 
 class MyBot:
     def __init__(self, action_size=16):  # Increased action space
         self.action_size = action_size
-        self.memory = deque(maxlen=100000)  # Increased memory size
+        self.memory = deque(maxlen=50000)  # Reduced memory size for efficiency
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_min = 0.05  # Lower minimum exploration
-        self.epsilon_decay = 0.9995  # Slower decay
-        self.learning_rate = 0.0003  # Reduced learning rate
-        self.batch_size = 32  # Reduced batch size for faster initial learning
+        self.epsilon_decay = 0.995  # Faster decay for quicker learning
+        self.learning_rate = 0.001  # Increased learning rate for faster learning
+        self.batch_size = 64  # Increased batch size for more stable learning
         self.min_memory_size = 1000  # Minimum memory size before starting training
-        self.update_target_freq = 1000  # How often to update target network
+        self.update_target_freq = 500  # More frequent target network updates
+        self.train_freq = 4  # Only train every 4 steps for efficiency
         self.steps = 0
 
         # Device selection
@@ -203,12 +191,18 @@ class MyBot:
                 print(f"Starting training with {len(self.memory)} samples in memory")
                 self.training_started = True
 
-            # Perform learning step if we have enough samples
-            if self.training_started:
+            # Increment step counter
+            self.steps += 1
+
+            # Perform learning step if we have enough samples and it's time to train
+            if self.training_started and self.steps % self.train_freq == 0:
                 self.replay()
 
+                # Print training progress periodically
+                if self.steps % 1000 == 0:
+                    print(f"Step {self.steps}, epsilon: {self.epsilon:.4f}")
+
             # Update target network periodically
-            self.steps += 1
             if self.steps % self.update_target_freq == 0:
                 self.target_model.load_state_dict(self.model.state_dict())
                 print(f"Updated target network at step {self.steps}")

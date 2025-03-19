@@ -234,11 +234,13 @@ class Env:
             self.screen.blit(scaled_surface, (0, 0))
             pygame.display.flip()
 
-        # In training mode, you might not call tick or you can use a high tick rate.
+        # In training mode, use a high tick rate but not unreasonably high
         if not self.training_mode:
-            self.clock.tick(120)
+            self.clock.tick(120)  # Normal gameplay speed
         else:
-            self.clock.tick(10000000)  # Use a high FPS limit in training mode.
+            # A more reasonable but still very fast tick rate for training
+            # This prevents potential issues with extremely high tick rates
+            self.clock.tick(0)  # 0 means no limit, but more stable than an extremely high value
 
         return False, new_dic
 
@@ -276,17 +278,18 @@ class Env:
 
     def calculate_reward(self, info_dictionary, bot_username):
         """
-        Reward function for training bots.
+        Improved reward function for training bots.
         Reward components (one-time per step):
-          1. Walking: if the bot moves, +1 (only if it moved this step).
-          2. Exploring: if the bot enters a new grid cell (e.g., 100x100), +5.
+          1. Walking: if the bot moves, reward based on distance moved.
+          2. Exploring: if the bot enters a new grid cell, significant reward.
           3. Damage: reward the damage inflicted this frame.
-          4. Kill: reward massively for new kills (+20 per kill).
-          5. Negative reward for missing: if a shot was fired and no damage was dealt, -1.
-          6. Negative reward if hit by enemy: if health decreases compared to last step, negative penalty.
-          7. Negative reward for staying near the borders: if within 50 pixels of any border, -1.
+          4. Kill: reward massively for new kills.
+          5. Small negative reward for missing: if a shot was fired and no damage was dealt.
+          6. Negative reward if hit by enemy: if health decreases compared to last step.
+          7. Negative reward for staying near the borders.
+          8. Survival reward: small positive reward for staying alive.
 
-        Additionally, all rewards are scaled by a time-based multiplier that decays over the episode.
+        Time-based decay is reduced to allow better learning in later stages.
         """
         players_info = info_dictionary.get("players_info", {})
         bot_info = players_info.get(bot_username)
@@ -317,36 +320,36 @@ class Env:
 
         reward = 0
 
-        # 1. Walking reward (one-time): if moved at all, +1
+        # 1. Walking reward: proportional to distance moved
         distance_moved = math.dist(current_position, self.last_positions[bot_username])
         if distance_moved > 0:
-            reward += 0.01
+            reward += distance_moved * 0.05  # Increased reward for movement
 
-        # 2. Exploration reward (one-time): if entering a new grid cell, +1
+        # 2. Exploration reward: significant reward for new areas
         grid_size = 100  # Adjust as needed.
         cell = (int(current_position[0] // grid_size), int(current_position[1] // grid_size))
         if cell not in self.visited_areas[bot_username]:
-            reward += 0.1
+            reward += 1.0  # Increased reward for exploration
             self.visited_areas[bot_username].add(cell)
 
         # 3. Damage reward: reward the damage inflicted this frame.
         delta_damage = damage_dealt - self.last_damage[bot_username]
         if delta_damage > 0:
-            reward += delta_damage * 2  # 2 point per damage unit
+            reward += delta_damage * 3  # Increased reward per damage unit
 
         # 4. Kill reward: massive reward for new kills.
         delta_kills = kills - self.last_kills[bot_username]
         if delta_kills > 0:
-            reward += delta_kills * 15  # 15 points per kill
+            reward += delta_kills * 20  # Increased reward per kill
 
-        # 5. Negative reward for missing: if a shot was fired and no damage occurred.
+        # 5. Smaller negative reward for missing: if a shot was fired and no damage occurred.
         if shot_fired and delta_damage <= 0:
-            reward -= 1
+            reward -= 0.5  # Reduced penalty for missing
 
         # 6. Negative reward if hit by enemy: if health decreased.
         delta_health = self.last_health[bot_username] - health
         if delta_health > 0:
-            reward -= delta_health * 0.2  # Adjust penalty factor as needed
+            reward -= delta_health * 0.5  # Adjusted penalty factor
 
         # 7. Negative reward for staying near the borders.
         border_threshold = 50
@@ -357,7 +360,11 @@ class Env:
                 current_position[1] > self.world_height - border_threshold
         )
         if near_border:
-            reward -= 1
+            reward -= 0.5  # Reduced penalty for border proximity
+
+        # 8. Survival reward: small positive reward for staying alive
+        if alive:
+            reward += 0.1  # Small reward for survival
 
         # Update tracking values for next step.
         self.last_positions[bot_username] = current_position
@@ -365,8 +372,9 @@ class Env:
         self.last_kills[bot_username] = kills
         self.last_health[bot_username] = health
 
-        decay_rate = 0.0001  # Determines how fast the multiplier decays per step.
-        time_multiplier = max(0.2, 1 - decay_rate * self.steps)
+        # Reduced decay rate for more consistent learning
+        decay_rate = 0.00005  # Half the previous decay rate
+        time_multiplier = max(0.5, 1 - decay_rate * self.steps)  # Higher minimum multiplier
         reward *= time_multiplier
 
         return reward

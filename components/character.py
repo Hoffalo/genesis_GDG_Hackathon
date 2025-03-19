@@ -19,7 +19,7 @@ class Character:
         self.health = 100
         self.speed = speed
         self.distance_vision = 1500
-        self.damage = 20
+        self.damage = 100 # modified to one shot kill
         self.delay = 0 #0.3 #(between shoots), a lot of time so it is longer but more intense
         self.max_ammo = 30
         self.current_ammo = self.max_ammo

@@ -61,14 +61,21 @@ def main():
     env.set_players_bots_objects(players, bots)
 
     # Training / Game parameters.
-    tick_limit = 1200  # ticks per episode (60 ticks/second * 20 seconds = 1200 ticks)
-    num_epochs = 100  # number of episodes
+    tick_limit = 2400  # Increased ticks per episode for more training (60 ticks/second * 40 seconds = 2400 ticks)
+    num_epochs = 200  # Increased number of episodes for more training
+
+    # Track rewards for monitoring learning progress
+    episode_rewards = {player.username: [] for player in players}
+    avg_rewards = {player.username: [] for player in players}
 
     for epoch in range(num_epochs):
-        print(f"Starting epoch {epoch + 1}")
+        print(f"Starting epoch {epoch + 1}/{num_epochs}")
         env.reset(randomize_objects=True)
         # Reset the step counter at the beginning of each episode
         env.steps = 0
+
+        # Reset episode rewards
+        current_episode_rewards = {player.username: 0 for player in players}
 
         while True:
             # If the tick limit for this episode has been reached, break.
@@ -84,25 +91,34 @@ def main():
             for player, bot in zip(players, bots):
                 # Calculate the reward for the current step (adjust calculate_reward as needed).
                 reward = env.calculate_reward(info, player.username)
+                # Accumulate rewards for this episode
+                current_episode_rewards[player.username] += reward
+
                 # Retrieve the updated state for the player.
                 next_info = player.get_info()
                 # Store the transition (last state, action, reward, next state, done).
                 bot.remember(reward, next_info, finished)
-                # Train the bot from experience.
-                bot.replay()
 
-                #print(f"Reward for {player.username}: {reward}")
+                # Training is now handled in the remember method based on train_freq
 
             # If the game/episode is over, break out of the loop.
             if finished:
-                print("Episode finished, took {} ticks.".format(env.steps))
+                print(f"Episode {epoch + 1} finished, took {env.steps} ticks.")
                 break
 
-        # Optionally, save the model weights after each epoch.
-        for idx, bot in enumerate(bots):
-            save_path = f"bot_model_{idx}.pth"
-            bot.save(save_path)
-            print(f"Saved model for player {players[idx].username} to {save_path}")
+        # Record and display episode rewards
+        for player in players:
+            episode_rewards[player.username].append(current_episode_rewards[player.username])
+            avg_reward = sum(episode_rewards[player.username][-10:]) / min(10, len(episode_rewards[player.username]))
+            avg_rewards[player.username].append(avg_reward)
+            print(f"Episode {epoch + 1} - {player.username}: Reward = {current_episode_rewards[player.username]:.2f}, Avg(10) = {avg_reward:.2f}, Epsilon = {player.related_bot.epsilon:.4f}")
+
+        # Save the model weights every 10 epochs or at the end
+        if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
+            for idx, bot in enumerate(bots):
+                save_path = f"bot_model_{idx}.pth"
+                bot.save(save_path)
+                print(f"Saved model for player {players[idx].username} to {save_path}")
 
     pygame.quit()
 
