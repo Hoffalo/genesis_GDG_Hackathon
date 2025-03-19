@@ -1,6 +1,5 @@
 import math
 import os
-import time
 import pygame
 from advanced_UI import game_UI
 from components.world_gen import spawn_objects
@@ -89,7 +88,9 @@ class Env:
             if not self.use_advanced_UI:
                 self.screen.fill("green")
                 pygame.display.flip()
-                time.sleep(1)
+                # Use clock.tick() instead of time.sleep() for a 1-second delay
+                # This will work correctly with different tick rates
+                self.clock.tick(1)  # 1 frame per second for 1 second = 1 frame
             else:
                 self.advanced_UI.display_reset_screen()
 
@@ -159,6 +160,9 @@ class Env:
         alive_players = []
 
         for player in self.players:
+            # Update the tick counter for each player
+            player.update_tick()
+
             actions = player.related_bot.act(player.get_info())
 
             if player.alive:

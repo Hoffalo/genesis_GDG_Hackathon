@@ -1,6 +1,7 @@
-import time
 import pygame
 from components.utils import find_hit_point_on_rectangle, distance_between_points
+
+# TODO: remember to re-enable the ammo, uncomment line that removes 1 ammo
 
 class Character:
     def __init__(self, starting_pos, screen, speed=5, boundaries=None, objects=None, username=None):
@@ -19,7 +20,7 @@ class Character:
         self.speed = speed
         self.distance_vision = 1500
         self.damage = 20
-        self.delay = 0.3 #(between shoots), a lot of time so it is longer but more intense
+        self.delay = 0 #0.3 #(between shoots), a lot of time so it is longer but more intense
         self.max_ammo = 30
         self.current_ammo = self.max_ammo
         self.time_to_reload = 3
@@ -34,8 +35,9 @@ class Character:
         self.total_rotation = 0
 
         """TIMERS"""
-        self.start_reloading_time = None
-        self.last_shoot_time = None
+        self.current_tick = 0
+        self.reload_start_tick = None
+        self.last_shoot_tick = None
 
         self.screen = screen
         self.players = []
@@ -145,8 +147,10 @@ class Character:
 
     def shoot(self):
         if self.current_ammo > 0:
-            if self.last_shoot_time is not None and time.time() - self.last_shoot_time < self.delay:
-                print("still on delay")
+            # Convert delay seconds to ticks (assuming 60 ticks per second)
+            delay_ticks = int(self.delay * 60)
+            if self.last_shoot_tick is not None and self.current_tick - self.last_shoot_tick < delay_ticks:
+                print("still on delay", self.current_tick - self.last_shoot_tick)
                 return False
 
             ray  = self.create_rays(num_rays=1, max_angle_view=1, distance=5000, damage=self.damage)[0]
@@ -159,14 +163,14 @@ class Character:
                 color = "gray"
 
                 pygame.draw.line(self.screen, color, ray[0][0], ray[0][1], 5)
-            self.last_shoot_time = time.time()
+            self.last_shoot_tick = self.current_tick
 
-            self.current_ammo -= 1
-            if self.current_ammo <= 0 and self.start_reloading_time is None:
+            #self.current_ammo -= 1
+            if self.current_ammo <= 0 and self.reload_start_tick is None:
                 self.is_reloading = True
                 print("is reloading", self.current_ammo)
                 self.reload()
-            else:
+            elif self.current_ammo <= 0 and self.reload_start_tick is not None:
                 print("is reloading (technically)")
 
         else:
@@ -182,8 +186,9 @@ class Character:
         self.current_ammo = self.max_ammo
         self.alive = True
         self.is_reloading = False
-        self.start_reloading_time = None
-        self.last_shoot_time = None
+        self.current_tick = 0
+        self.reload_start_tick = None
+        self.last_shoot_tick = None
         self.rays = []
         self.total_kills = 0
         self.damage_dealt = 0
@@ -275,12 +280,14 @@ class Character:
 
     def reload(self):
         if self.is_reloading:
-            if self.start_reloading_time is None:
-                self.start_reloading_time = time.time()
+            if self.reload_start_tick is None:
+                self.reload_start_tick = self.current_tick
             else:
-                if time.time() - self.start_reloading_time >= self.time_to_reload:
+                # Convert time_to_reload seconds to ticks (assuming 60 ticks per second)
+                reload_ticks = int(self.time_to_reload * 60)
+                if self.current_tick - self.reload_start_tick >= reload_ticks:
                     self.current_ammo = self.max_ammo
-                    self.start_reloading_time = None
+                    self.reload_start_tick = None
                     self.is_reloading = False
 
     """PYGAME"""
@@ -324,6 +331,10 @@ class Character:
             return False
 
         return True
+
+    def update_tick(self):
+        # Increment the tick counter
+        self.current_tick += 1
 
     def draw(self, screen):
         # Draw character body
