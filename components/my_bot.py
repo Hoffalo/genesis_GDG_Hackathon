@@ -10,14 +10,16 @@ import random
 class ImprovedDQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(ImprovedDQN, self).__init__()
-        # Simplified architecture with fewer layers and neurons
-        # Process all inputs together for better efficiency
+        # Enhanced architecture with deeper layers and more neurons
+        # Process all inputs together for better learning
 
-        # First layer processes location and status
+        # Deeper network with more capacity
         self.input_net = nn.Sequential(
-            nn.Linear(34, 128),  # All inputs combined
+            nn.Linear(34, 256),  # Increased first layer size
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(256, 256),  # Increased hidden layer size
+            nn.ReLU(),
+            nn.Linear(256, 128),  # Added another layer for more depth
             nn.ReLU(),
             nn.Linear(128, output_dim)
         )
@@ -44,16 +46,16 @@ class ImprovedDQN(nn.Module):
 class MyBot:
     def __init__(self, action_size=16):  # Increased action space
         self.action_size = action_size
-        self.memory = deque(maxlen=50000)  # Reduced memory size for efficiency
+        self.memory = deque(maxlen=100000)  # Increased memory size for better learning
         self.gamma = 0.99
         self.epsilon = 1.0
-        self.epsilon_min = 0.05  # Lower minimum exploration
-        self.epsilon_decay = 0.995  # Faster decay for quicker learning
-        self.learning_rate = 0.001  # Increased learning rate for faster learning
-        self.batch_size = 64  # Increased batch size for more stable learning
-        self.min_memory_size = 1000  # Minimum memory size before starting training
-        self.update_target_freq = 500  # More frequent target network updates
-        self.train_freq = 4  # Only train every 4 steps for efficiency
+        self.epsilon_min = 0.01  # Lower minimum exploration for better exploitation
+        self.epsilon_decay = 0.99  # Faster decay for quicker learning
+        self.learning_rate = 0.0005  # Adjusted learning rate for stability with larger network
+        self.batch_size = 128  # Increased batch size for more stable learning
+        self.min_memory_size = 2000  # Increased minimum memory size for better initial learning
+        self.update_target_freq = 200  # More frequent target network updates
+        self.train_freq = 2  # Train more frequently for faster learning
         self.steps = 0
 
         # Device selection

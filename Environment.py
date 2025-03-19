@@ -10,7 +10,7 @@ from components.world_gen import spawn_objects
 
 class Env:
     def __init__(self, training=False, use_game_ui=True, world_width=1280, world_height=1280, display_width=640,
-                 display_height=640, n_of_obstacles=10):
+                 display_height=640, n_of_obstacles=10, frame_skip=4):
         pygame.init()
 
         self.training_mode = training
@@ -47,6 +47,9 @@ class Env:
         self.n_of_obstacles = n_of_obstacles
         self.min_obstacle_size = (50, 50)
         self.max_obstacle_size = (100, 100)
+
+        # Frame skip for training acceleration
+        self.frame_skip = frame_skip if training else 1
 
         # INIT SOME VARIABLES
         self.OG_bots = None
@@ -147,6 +150,7 @@ class Env:
             player.objects = self.obstacles
 
     def step(self, debugging=False):
+        # Only render if not in training mode
         if not self.training_mode:
             if self.use_advanced_UI:
                 # Use the background from game_UI
@@ -154,82 +158,107 @@ class Env:
             else:
                 self.world_surface.fill("purple")
 
-        self.steps += 1
+        # Implement frame skipping for training acceleration
+        skip_count = self.frame_skip if self.training_mode else 1
 
-        players_info = {}
-        alive_players = []
+        # Track if any frame resulted in game over
+        game_over = False
+        final_info = None
 
-        for player in self.players:
-            # Update the tick counter for each player
-            player.update_tick()
+        # Get actions once and reuse them for all skipped frames
+        player_actions = {}
+        if self.training_mode:
+            for player in self.players:
+                if player.alive:
+                    player_actions[player.username] = player.related_bot.act(player.get_info())
 
-            actions = player.related_bot.act(player.get_info())
+        # Process multiple frames if frame skipping is enabled
+        for _ in range(skip_count):
+            if game_over:
+                break
 
-            if player.alive:
+            self.steps += 1
 
-                alive_players.append(player)
-                player.reload()
+            players_info = {}
+            alive_players = []
 
-                # only draw if not in training mode.
-                if not self.training_mode:
-                    player.draw(self.world_surface)
+            for player in self.players:
+                # Update the tick counter for each player
+                player.update_tick()
 
-                if debugging:
-                    print("Bot would like to do:", actions)
-                if actions["forward"]:
-                    player.move_in_direction("forward")
-                if actions["right"]:
-                    player.move_in_direction("right")
-                if actions["down"]:
-                    player.move_in_direction("down")
-                if actions["left"]:
-                    player.move_in_direction("left")
-                if actions["rotate"]:
-                    player.add_rotate(actions["rotate"])
-                if actions["shoot"]:
-                    player.shoot()
-
-                if not self.training_mode:
-                    # Store position for trail
-                    if not hasattr(player, 'previous_positions'):
-                        player.previous_positions = []
-                    player.previous_positions.append(player.rect.center)
-                    if len(player.previous_positions) > 10:
-                        player.previous_positions.pop(0)
-
-            players_info[player.username] = player.get_info()
-
-            players_info[player.username]["shot_fired"] = actions["shoot"]
-
-
-        new_dic = {
-            "general_info": {
-                "total_players": len(self.players),
-                "alive_players": len(alive_players)
-            },
-            "players_info": players_info
-        }
-
-        if len(alive_players) == 1:
-            print("Game Over, winner is:", alive_players[0].username)
-            if not self.training_mode:
-                if self.use_advanced_UI:
-                    self.advanced_UI.display_winner_screen(alive_players)
+                # Use stored actions if in training mode with frame skipping
+                if self.training_mode and skip_count > 1:
+                    actions = player_actions.get(player.username, {})
                 else:
-                    self.screen.fill("green")
+                    actions = player.related_bot.act(player.get_info())
 
-            # self.running = False
-            print("Total steps:", self.steps)
-            return True, new_dic  # Game is over
+                if player.alive:
+                    alive_players.append(player)
+                    player.reload()
 
-        if self.use_advanced_UI:
-            self.advanced_UI.draw_everything(new_dic, self.players, self.obstacles)
-        elif not self.training_mode:
-            # Draw obstacles manually if not using advanced UI
-            for obstacle in self.obstacles:
-                obstacle.draw(self.world_surface)
+                    # Skip drawing in training mode for better performance
+                    if not self.training_mode:
+                        player.draw(self.world_surface)
 
+                    if debugging:
+                        print("Bot would like to do:", actions)
+                    if actions.get("forward", False):
+                        player.move_in_direction("forward")
+                    if actions.get("right", False):
+                        player.move_in_direction("right")
+                    if actions.get("down", False):
+                        player.move_in_direction("down")
+                    if actions.get("left", False):
+                        player.move_in_direction("left")
+                    if actions.get("rotate", 0):
+                        player.add_rotate(actions["rotate"])
+                    if actions.get("shoot", False):
+                        player.shoot()
+
+                    if not self.training_mode:
+                        # Store position for trail
+                        if not hasattr(player, 'previous_positions'):
+                            player.previous_positions = []
+                        player.previous_positions.append(player.rect.center)
+                        if len(player.previous_positions) > 10:
+                            player.previous_positions.pop(0)
+
+                players_info[player.username] = player.get_info()
+                players_info[player.username]["shot_fired"] = actions.get("shoot", False)
+
+            new_dic = {
+                "general_info": {
+                    "total_players": len(self.players),
+                    "alive_players": len(alive_players)
+                },
+                "players_info": players_info
+            }
+
+            # Store the final state
+            final_info = new_dic
+
+            # Check if game is over
+            if len(alive_players) == 1:
+                print("Game Over, winner is:", alive_players[0].username)
+                if not self.training_mode:
+                    if self.use_advanced_UI:
+                        self.advanced_UI.display_winner_screen(alive_players)
+                    else:
+                        self.screen.fill("green")
+
+                game_over = True
+                break
+
+        # Skip all rendering operations in training mode for better performance
         if not self.training_mode:
+            if self.use_advanced_UI:
+                self.advanced_UI.draw_everything(final_info, self.players, self.obstacles)
+            else:
+                # Draw obstacles manually if not using advanced UI
+                for obstacle in self.obstacles:
+                    obstacle.draw(self.world_surface)
+
+            # Scale and display the world surface
             scaled_surface = pygame.transform.scale(self.world_surface, (self.display_width, self.display_height))
             self.screen.blit(scaled_surface, (0, 0))
             pygame.display.flip()
@@ -238,11 +267,16 @@ class Env:
         if not self.training_mode:
             self.clock.tick(120)  # Normal gameplay speed
         else:
-            # A more reasonable but still very fast tick rate for training
-            # This prevents potential issues with extremely high tick rates
-            self.clock.tick(0)  # 0 means no limit, but more stable than an extremely high value
+            # Skip the clock tick entirely in training mode for maximum speed
+            pass  # No tick limiting in training mode for maximum speed
 
-        return False, new_dic
+        # Return the final state
+        if game_over:
+            print("Total steps:", self.steps)
+            return True, final_info  # Game is over
+        else:
+            # Return the final state from the last frame
+            return False, final_info
 
     """TO MODIFY"""
     def calculate_reward_empty(self, info_dictionary, bot_username):
@@ -278,18 +312,15 @@ class Env:
 
     def calculate_reward(self, info_dictionary, bot_username):
         """
-        Improved reward function for training bots.
-        Reward components (one-time per step):
-          1. Walking: if the bot moves, reward based on distance moved.
-          2. Exploring: if the bot enters a new grid cell, significant reward.
-          3. Damage: reward the damage inflicted this frame.
-          4. Kill: reward massively for new kills.
-          5. Small negative reward for missing: if a shot was fired and no damage was dealt.
-          6. Negative reward if hit by enemy: if health decreases compared to last step.
-          7. Negative reward for staying near the borders.
-          8. Survival reward: small positive reward for staying alive.
+        Simplified reward function for faster learning.
+        Focuses on key objectives:
+          1. Damage: High reward for dealing damage
+          2. Kills: Very high reward for kills
+          3. Survival: Reward for staying alive
+          4. Movement: Small reward for movement to encourage exploration
+          5. Penalties for taking damage and missing shots
 
-        Time-based decay is reduced to allow better learning in later stages.
+        No time decay to ensure consistent learning throughout training.
         """
         players_info = info_dictionary.get("players_info", {})
         bot_info = players_info.get(bot_username)
@@ -303,7 +334,6 @@ class Env:
         kills = bot_info.get("kills", 0)
         alive = bot_info.get("alive", False)
         health = bot_info.get("health", 100)
-        # Expect a flag indicating if a shot was fired this frame
         shot_fired = bot_info.get("shot_fired", False)
 
         # Initialize tracking dictionaries if necessary
@@ -315,66 +345,40 @@ class Env:
             self.last_kills[bot_username] = kills
         if bot_username not in self.last_health:
             self.last_health[bot_username] = health
-        if bot_username not in self.visited_areas:
-            self.visited_areas[bot_username] = set()
 
         reward = 0
 
-        # 1. Walking reward: proportional to distance moved
+        # 1. Movement reward - small but important to encourage exploration
         distance_moved = math.dist(current_position, self.last_positions[bot_username])
-        if distance_moved > 0:
-            reward += distance_moved * 0.05  # Increased reward for movement
+        reward += distance_moved * 0.1  # Increased from 0.05
 
-        # 2. Exploration reward: significant reward for new areas
-        grid_size = 100  # Adjust as needed.
-        cell = (int(current_position[0] // grid_size), int(current_position[1] // grid_size))
-        if cell not in self.visited_areas[bot_username]:
-            reward += 1.0  # Increased reward for exploration
-            self.visited_areas[bot_username].add(cell)
-
-        # 3. Damage reward: reward the damage inflicted this frame.
+        # 2. Damage reward - significant reward for dealing damage
         delta_damage = damage_dealt - self.last_damage[bot_username]
         if delta_damage > 0:
-            reward += delta_damage * 3  # Increased reward per damage unit
+            reward += delta_damage * 5.0  # Increased from 3.0
 
-        # 4. Kill reward: massive reward for new kills.
+        # 3. Kill reward - very high reward for kills
         delta_kills = kills - self.last_kills[bot_username]
         if delta_kills > 0:
-            reward += delta_kills * 20  # Increased reward per kill
+            reward += delta_kills * 50.0  # Increased from 20.0
 
-        # 5. Smaller negative reward for missing: if a shot was fired and no damage occurred.
+        # 4. Shot penalty - small penalty for missing to encourage accuracy
         if shot_fired and delta_damage <= 0:
-            reward -= 0.5  # Reduced penalty for missing
+            reward -= 0.2  # Reduced from 0.5 to be less punishing
 
-        # 6. Negative reward if hit by enemy: if health decreased.
+        # 5. Damage taken penalty - moderate penalty for taking damage
         delta_health = self.last_health[bot_username] - health
         if delta_health > 0:
-            reward -= delta_health * 0.5  # Adjusted penalty factor
+            reward -= delta_health * 0.3  # Reduced from 0.5
 
-        # 7. Negative reward for staying near the borders.
-        border_threshold = 50
-        near_border = (
-                current_position[0] < border_threshold or
-                current_position[0] > self.world_width - border_threshold or
-                current_position[1] < border_threshold or
-                current_position[1] > self.world_height - border_threshold
-        )
-        if near_border:
-            reward -= 0.5  # Reduced penalty for border proximity
-
-        # 8. Survival reward: small positive reward for staying alive
+        # 6. Survival reward - increased to emphasize staying alive
         if alive:
-            reward += 0.1  # Small reward for survival
+            reward += 0.5  # Increased from 0.1
 
-        # Update tracking values for next step.
+        # Update tracking values for next step
         self.last_positions[bot_username] = current_position
         self.last_damage[bot_username] = damage_dealt
         self.last_kills[bot_username] = kills
         self.last_health[bot_username] = health
-
-        # Reduced decay rate for more consistent learning
-        decay_rate = 0.00005  # Half the previous decay rate
-        time_multiplier = max(0.5, 1 - decay_rate * self.steps)  # Higher minimum multiplier
-        reward *= time_multiplier
 
         return reward

@@ -17,14 +17,15 @@ def main():
     load_back = True
     state_size = 34
 
-    # Create the environment.
+    # Create the environment with frame skipping for faster training
     env = Env(training=True,
               use_game_ui=False,
               world_width=world_width,
               world_height=world_height,
               display_width=display_width,
               display_height=display_height,
-              n_of_obstacles=n_of_obstacles)
+              n_of_obstacles=n_of_obstacles,
+              frame_skip=8)  # Use frame skipping to accelerate training
     screen = env.world_surface
     world_bounds = env.get_world_bounds()
 
@@ -61,8 +62,8 @@ def main():
     env.set_players_bots_objects(players, bots)
 
     # Training / Game parameters.
-    tick_limit = 2400  # Increased ticks per episode for more training (60 ticks/second * 40 seconds = 2400 ticks)
-    num_epochs = 200  # Increased number of episodes for more training
+    tick_limit = 1200  # Reduced ticks per episode since we're using frame skipping (8x faster)
+    num_epochs = 500  # Increased number of episodes for more thorough training
 
     # Track rewards for monitoring learning progress
     episode_rewards = {player.username: [] for player in players}
@@ -113,8 +114,8 @@ def main():
             avg_rewards[player.username].append(avg_reward)
             print(f"Episode {epoch + 1} - {player.username}: Reward = {current_episode_rewards[player.username]:.2f}, Avg(10) = {avg_reward:.2f}, Epsilon = {player.related_bot.epsilon:.4f}")
 
-        # Save the model weights every 10 epochs or at the end
-        if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
+        # Save the model weights more frequently (every 5 epochs) to prevent loss of progress
+        if (epoch + 1) % 5 == 0 or epoch == num_epochs - 1:
             for idx, bot in enumerate(bots):
                 save_path = f"bot_model_{idx}.pth"
                 bot.save(save_path)
