@@ -170,7 +170,10 @@ class Env:
         if self.training_mode:
             for player in self.players:
                 if player.alive:
-                    player_actions[player.username] = player.related_bot.act(player.get_info())
+                    # Update player info with closest opponent data before action
+                    player_info = player.get_info()
+                    player_info['closest_opponent'] = self.find_closest_opponent(player)
+                    player_actions[player.username] = player.related_bot.act(player_info)
 
         # Process multiple frames if frame skipping is enabled
         for _ in range(skip_count):
@@ -190,7 +193,10 @@ class Env:
                 if self.training_mode and skip_count > 1:
                     actions = player_actions.get(player.username, {})
                 else:
-                    actions = player.related_bot.act(player.get_info())
+                    # Update info with closest opponent before getting action
+                    player_info = player.get_info()
+                    player_info['closest_opponent'] = self.find_closest_opponent(player)
+                    actions = player.related_bot.act(player_info)
 
                 if player.alive:
                     alive_players.append(player)
@@ -223,8 +229,11 @@ class Env:
                         if len(player.previous_positions) > 10:
                             player.previous_positions.pop(0)
 
-                players_info[player.username] = player.get_info()
-                players_info[player.username]["shot_fired"] = actions.get("shoot", False)
+                # Add closest opponent info to player info
+                player_info = player.get_info()
+                player_info["shot_fired"] = actions.get("shoot", False)
+                player_info["closest_opponent"] = self.find_closest_opponent(player)
+                players_info[player.username] = player_info
 
             new_dic = {
                 "general_info": {
@@ -278,6 +287,24 @@ class Env:
             # Return the final state from the last frame
             return False, final_info
 
+    def find_closest_opponent(self, player):
+        """Find the position of the closest opponent for a given player"""
+        closest_dist = float('inf')
+        closest_pos = None
+        
+        for other in self.players:
+            if other != player and other.alive:
+                dist = math.dist(player.rect.center, other.rect.center)
+                if dist < closest_dist:
+                    closest_dist = dist
+                    closest_pos = other.rect.center
+                    
+        # Return default position if no opponents found
+        if closest_pos is None:
+            return player.rect.center  # Return own position as fallback
+            
+        return closest_pos
+
     """TO MODIFY"""
     def calculate_reward_empty(self, info_dictionary, bot_username):
         """THIS FUNCTION IS USED TO CALCULATE THE REWARD FOR A BOT"""
@@ -312,15 +339,11 @@ class Env:
 
     def calculate_reward(self, info_dictionary, bot_username):
         """
-        Simplified reward function for faster learning.
-        Focuses on key objectives:
-          1. Damage: High reward for dealing damage
-          2. Kills: Very high reward for kills
-          3. Survival: Reward for staying alive
-          4. Movement: Small reward for movement to encourage exploration
-          5. Penalties for taking damage and missing shots
-
-        No time decay to ensure consistent learning throughout training.
+        Balanced reward function that encourages:
+        1. Survival and health maintenance
+        2. Accurate shooting and damage dealing
+        3. Strategic movement and positioning
+        4. Eliminating opponents
         """
         players_info = info_dictionary.get("players_info", {})
         bot_info = players_info.get(bot_username)
@@ -348,32 +371,36 @@ class Env:
 
         reward = 0
 
-        # 1. Movement reward - small but important to encourage exploration
+        # 1. Movement reward - encourage exploration but not excessive movement
         distance_moved = math.dist(current_position, self.last_positions[bot_username])
-        reward += distance_moved * 0.1  # Increased from 0.05
+        reward += min(distance_moved * 0.05, 0.5)  # Cap movement reward
 
-        # 2. Damage reward - significant reward for dealing damage
+        # 2. Damage reward - encourage accurate shooting
         delta_damage = damage_dealt - self.last_damage[bot_username]
         if delta_damage > 0:
-            reward += delta_damage * 5.0  # Increased from 3.0
+            reward += delta_damage * 2.0  # Reduced from 5.0 for more balanced rewards
 
-        # 3. Kill reward - very high reward for kills
+        # 3. Kill reward - significant but not overwhelming
         delta_kills = kills - self.last_kills[bot_username]
         if delta_kills > 0:
-            reward += delta_kills * 50.0  # Increased from 20.0
+            reward += delta_kills * 20.0  # Reduced from 50.0 for more balanced rewards
 
-        # 4. Shot penalty - small penalty for missing to encourage accuracy
+        # 4. Shot penalty - encourage accuracy without being too punishing
         if shot_fired and delta_damage <= 0:
-            reward -= 0.2  # Reduced from 0.5 to be less punishing
+            reward -= 0.1  # Reduced penalty for missing shots
 
-        # 5. Damage taken penalty - moderate penalty for taking damage
+        # 5. Damage taken penalty - encourage defensive play
         delta_health = self.last_health[bot_username] - health
         if delta_health > 0:
-            reward -= delta_health * 0.3  # Reduced from 0.5
+            reward -= delta_health * 0.2  # Reduced penalty for taking damage
 
-        # 6. Survival reward - increased to emphasize staying alive
+        # 6. Survival reward - encourage staying alive
         if alive:
-            reward += 0.5  # Increased from 0.1
+            reward += 0.1  # Small constant reward for staying alive
+
+        # 7. Health bonus - encourage maintaining high health
+        if health > 80:
+            reward += 0.05  # Small bonus for maintaining high health
 
         # Update tracking values for next step
         self.last_positions[bot_username] = current_position
