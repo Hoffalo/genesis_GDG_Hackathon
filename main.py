@@ -186,6 +186,9 @@ def main(num_environments=4, device=None, num_epochs=1000):
     # Create training run directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = f"training_runs/{timestamp}"
+    
+    # Make sure parent directory exists
+    os.makedirs("training_runs", exist_ok=True)
     os.makedirs(run_dir, exist_ok=True)
     os.makedirs(f"{run_dir}/models", exist_ok=True)
     os.makedirs(f"{run_dir}/plots", exist_ok=True)
@@ -392,7 +395,7 @@ def main(num_environments=4, device=None, num_epochs=1000):
                     
                     # Save metrics and plots periodically with error handling
                     current_epoch = shared_history["current_epoch"].value
-                    if (current_epoch) % 10 == 0 or current_epoch >= num_epochs:
+                    if (current_epoch % 10 == 0) or current_epoch >= num_epochs:
                         try:
                             # Convert shared memory metrics to regular dict for saving
                             save_metrics = {}
@@ -427,10 +430,24 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             # Save model checkpoints
                             for idx, model_state in enumerate(shared_models):
                                 if model_state is not None:
-                                    save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}.pth"
-                                    torch.save(model_state, save_path)
-                                    # Also save to standard location for easy loading
-                                    torch.save(model_state, f"bot_model_{idx}.pth")
+                                    try:
+                                        save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}.pth"
+                                        torch.save(model_state, save_path)
+                                        print(f"Successfully saved model {idx} checkpoint at epoch {current_epoch}")
+                                        
+                                        # Also save to standard location for easy loading
+                                        torch.save(model_state, f"bot_model_{idx}.pth")
+                                        print(f"Successfully saved model {idx} to standard location")
+                                    except Exception as model_e:
+                                        print(f"Error saving model {idx} at epoch {current_epoch}: {model_e}")
+                                        # Ensure directory exists
+                                        os.makedirs(f"{run_dir}/models", exist_ok=True)
+                                        try:
+                                            torch.save(model_state, save_path)
+                                            torch.save(model_state, f"bot_model_{idx}.pth")
+                                            print(f"Successfully saved model {idx} after creating directory")
+                                        except Exception as model_e2:
+                                            print(f"Still could not save model {idx}: {model_e2}")
                                 
                             # Update last save timestamp
                             shared_history["last_save"].value = current_epoch
@@ -441,8 +458,14 @@ def main(num_environments=4, device=None, num_epochs=1000):
                     print(f"Error in batch {batch + 1}: {e}")
                     # Try to recover by saving current state
                     try:
+                        # Ensure recovery directory exists
+                        os.makedirs("recovery", exist_ok=True)
                         for idx, model_state in enumerate(shared_models):
                             if model_state is not None:
+                                recovery_path = f"recovery/bot_model_{idx}_recovery_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
+                                torch.save(model_state, recovery_path)
+                                print(f"Saved recovery model to {recovery_path}")
+                                # Also save to standard location
                                 torch.save(model_state, f"bot_model_{idx}_recovery.pth")
                     except Exception as recovery_e:
                         print(f"Error during recovery: {recovery_e}")
@@ -659,10 +682,24 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             # Save model checkpoints
                             for idx, model_state in enumerate(local_models):
                                 if model_state is not None:
-                                    save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{epoch+1}.pth"
-                                    torch.save(model_state, save_path)
-                                    # Also save to standard location for easy loading
-                                    torch.save(model_state, f"bot_model_{idx}.pth")
+                                    try:
+                                        save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{epoch+1}.pth"
+                                        torch.save(model_state, save_path)
+                                        print(f"Successfully saved model {idx} checkpoint at epoch {epoch+1}")
+                                        
+                                        # Also save to standard location for easy loading
+                                        torch.save(model_state, f"bot_model_{idx}.pth")
+                                        print(f"Successfully saved model {idx} to standard location")
+                                    except Exception as model_e:
+                                        print(f"Error saving model {idx} at epoch {epoch+1}: {model_e}")
+                                        # Ensure directory exists
+                                        os.makedirs(f"{run_dir}/models", exist_ok=True)
+                                        try:
+                                            torch.save(model_state, save_path)
+                                            torch.save(model_state, f"bot_model_{idx}.pth")
+                                            print(f"Successfully saved model {idx} after creating directory")
+                                        except Exception as model_e2:
+                                            print(f"Still could not save model {idx}: {model_e2}")
                         except Exception as e:
                             print(f"Error saving metrics or models: {e}")
                 
@@ -670,8 +707,14 @@ def main(num_environments=4, device=None, num_epochs=1000):
                     print(f"Error in epoch {epoch + 1}: {e}")
                     # Try to recover by saving current state
                     try:
+                        # Ensure recovery directory exists
+                        os.makedirs("recovery", exist_ok=True)
                         for idx, model_state in enumerate(local_models):
                             if model_state is not None:
+                                recovery_path = f"recovery/bot_model_{idx}_recovery_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
+                                torch.save(model_state, recovery_path)
+                                print(f"Saved recovery model to {recovery_path}")
+                                # Also save to standard location
                                 torch.save(model_state, f"bot_model_{idx}_recovery.pth")
                     except Exception as recovery_e:
                         print(f"Error during recovery: {recovery_e}")
@@ -814,7 +857,18 @@ def create_training_plots(metrics, run_dir, epoch):
                     bbox=dict(facecolor='white', alpha=0.8))
     
     plt.tight_layout()
-    plt.savefig(f"{run_dir}/plots/training_progress_epoch_{epoch}.png")
+    try:
+        plt.savefig(f"{run_dir}/plots/training_progress_epoch_{epoch}.png")
+        print(f"Successfully saved training progress plot for epoch {epoch}")
+    except Exception as e:
+        print(f"Error saving training progress plot for epoch {epoch}: {e}")
+        # Ensure directory exists
+        os.makedirs(f"{run_dir}/plots", exist_ok=True)
+        try:
+            plt.savefig(f"{run_dir}/plots/training_progress_epoch_{epoch}.png")
+            print(f"Successfully saved training progress plot after creating directory")
+        except Exception as e2:
+            print(f"Still could not save training progress plot: {e2}")
     
     # Create additional plots for more metrics
     plt.figure(figsize=(15, 5))
@@ -841,8 +895,20 @@ def create_training_plots(metrics, run_dir, epoch):
     plt.legend()
     
     plt.tight_layout()
-    plt.savefig(f"{run_dir}/plots/additional_metrics_epoch_{epoch}.png")
-    plt.close('all')
+    try:
+        plt.savefig(f"{run_dir}/plots/additional_metrics_epoch_{epoch}.png")
+        print(f"Successfully saved plots for epoch {epoch}")
+    except Exception as e:
+        print(f"Error saving additional metrics plot for epoch {epoch}: {e}")
+        # Ensure directory exists
+        os.makedirs(f"{run_dir}/plots", exist_ok=True)
+        try:
+            plt.savefig(f"{run_dir}/plots/additional_metrics_epoch_{epoch}.png")
+            print(f"Successfully saved plots after creating directory")
+        except Exception as e2:
+            print(f"Still could not save plot: {e2}")
+    finally:
+        plt.close('all')
 
 if __name__ == "__main__":
     # Parse command-line arguments
