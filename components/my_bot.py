@@ -50,7 +50,7 @@ class MyBot:
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_min = 0.05  # Increased minimum exploration from 0.01 to allow more exploration
-        self.epsilon_decay = 0.9999  # Much slower decay for more exploration throughout training
+        self.epsilon_decay = 0.995  # Much slower decay for more exploration throughout training
         self.learning_rate = 0.0001  # Reduced learning rate for stability
         self.batch_size = 64  # Reduced batch size for more stable learning
         self.min_memory_size = 1000  # Reduced minimum memory size for faster start
@@ -80,7 +80,7 @@ class MyBot:
         self.device = torch.device("cuda" if torch.cuda.is_available() else
                                    "mps" if torch.backends.mps.is_available() else
                                    "cpu")
-
+        self.device = torch.device("cpu")
         print(f"Using device: {self.device}")
 
         # Create two networks - one for current Q-values and one for target
