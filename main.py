@@ -352,10 +352,9 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             epoch = start_epoch + i
                             
                             # Update shared history
-                            with manager.get_lock():
-                                shared_history["total_steps"].value += steps
-                                shared_history["total_episodes"].value += 1
-                                shared_history["current_epoch"].value = epoch + 1
+                            shared_history["total_steps"].value += steps
+                            shared_history["total_episodes"].value += 1
+                            shared_history["current_epoch"].value = epoch + 1
                             
                             metrics["episode_steps"].append(steps)
                             for player in ["Ninja", "Faze Jarvis"]:
@@ -382,11 +381,10 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                       f"Epsilon = {episode_metrics['epsilon'][player]:.4f}")
                             
                             # Update shared models after each epoch
-                            with manager.get_lock():
-                                for idx, model_state in enumerate(model_states):
-                                    if model_state is not None:
-                                        shared_models[idx] = model_state
-                                        local_models[idx] = model_state  # Also update local storage
+                            for idx, model_state in enumerate(model_states):
+                                if model_state is not None:
+                                    shared_models[idx] = model_state
+                                    local_models[idx] = model_state  # Also update local storage
                                     
                         except Exception as e:
                             print(f"Error processing epoch {start_epoch + i} metrics: {e}")
@@ -397,10 +395,19 @@ def main(num_environments=4, device=None, num_epochs=1000):
                     if (current_epoch) % 10 == 0 or current_epoch >= num_epochs:
                         try:
                             # Convert shared memory metrics to regular dict for saving
-                            save_metrics = {
-                                k: (v if not isinstance(v, manager.list) else list(v)) 
-                                for k, v in metrics.items()
-                            }
+                            save_metrics = {}
+                            for k, v in metrics.items():
+                                if isinstance(v, dict):
+                                    save_metrics[k] = {}
+                                    for player, values in v.items():
+                                        if hasattr(values, '__iter__'):
+                                            save_metrics[k][player] = list(values)
+                                        else:
+                                            save_metrics[k][player] = values
+                                elif hasattr(v, '__iter__'):
+                                    save_metrics[k] = list(v)
+                                else:
+                                    save_metrics[k] = v
                             
                             # Add shared history to saved metrics
                             save_metrics["shared_history"] = {
@@ -418,16 +425,15 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             create_training_plots(save_metrics, run_dir, current_epoch)
                             
                             # Save model checkpoints
-                            with manager.get_lock():
-                                for idx, model_state in enumerate(shared_models):
-                                    if model_state is not None:
-                                        save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}.pth"
-                                        torch.save(model_state, save_path)
-                                        # Also save to standard location for easy loading
-                                        torch.save(model_state, f"bot_model_{idx}.pth")
+                            for idx, model_state in enumerate(shared_models):
+                                if model_state is not None:
+                                    save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}.pth"
+                                    torch.save(model_state, save_path)
+                                    # Also save to standard location for easy loading
+                                    torch.save(model_state, f"bot_model_{idx}.pth")
                                 
-                                # Update last save timestamp
-                                shared_history["last_save"].value = current_epoch
+                            # Update last save timestamp
+                            shared_history["last_save"].value = current_epoch
                         except Exception as e:
                             print(f"Error saving metrics or models: {e}")
                     
@@ -435,10 +441,9 @@ def main(num_environments=4, device=None, num_epochs=1000):
                     print(f"Error in batch {batch + 1}: {e}")
                     # Try to recover by saving current state
                     try:
-                        with manager.get_lock():
-                            for idx, model_state in enumerate(shared_models):
-                                if model_state is not None:
-                                    torch.save(model_state, f"bot_model_{idx}_recovery.pth")
+                        for idx, model_state in enumerate(shared_models):
+                            if model_state is not None:
+                                torch.save(model_state, f"bot_model_{idx}_recovery.pth")
                     except Exception as recovery_e:
                         print(f"Error during recovery: {recovery_e}")
         
@@ -711,11 +716,11 @@ def create_training_plots(metrics, run_dir, epoch):
     colors = {'Ninja': 'blue', 'Faze Jarvis': 'red'}
     
     for player, rewards in metrics["episode_rewards"].items():
-        plt.plot(x_values, rewards, label=f"{player} Rewards", color=colors.get(player, 'green'))
+        plt.plot(x_values, rewards, label=f"{player} Rewards", color=colors.get(player))
     
     for player, avg_rewards in metrics["avg_rewards"].items():
         plt.plot(x_values, avg_rewards, label=f"{player} Avg(10) Rewards", 
-                 linestyle='--', color=colors.get(player, 'green'), alpha=0.7)
+                 linestyle='--', color=colors.get(player), alpha=0.7)
     
     plt.title("Rewards per Epoch")
     plt.xlabel("Epoch")
@@ -731,7 +736,7 @@ def create_training_plots(metrics, run_dir, epoch):
         plt.bar([e - 0.2 if player == 'Ninja' else e + 0.2 for e in x_values], 
                 kills, 
                 width=0.4,
-                color=colors.get(player, 'green'),
+                color=colors.get(player),
                 label=f"{player} Kills")
     
     plt.title("Kills per Epoch")
@@ -746,7 +751,7 @@ def create_training_plots(metrics, run_dir, epoch):
     
     for player, damage in metrics["damage_dealt"].items():
         plt.plot(x_values, damage, label=f"{player} Damage", 
-                color=colors.get(player, 'green'),
+                color=colors.get(player),
                 marker=markers.get(player, 'x'),
                 markersize=4,
                 markevery=max(1, len(damage)//20))  # Show markers every ~20 points
@@ -764,7 +769,7 @@ def create_training_plots(metrics, run_dir, epoch):
     ax1 = plt.gca()
     for player, epsilon in metrics["epsilon"].items():
         ax1.plot(x_values, epsilon, label=f"{player} Epsilon",
-                color=colors.get(player, 'green'),
+                color=colors.get(player),
                 linestyle='-')
     
     ax1.set_xlabel("Epoch")
@@ -774,7 +779,7 @@ def create_training_plots(metrics, run_dir, epoch):
     ax2 = ax1.twinx()
     for player, lr in metrics["learning_rates"].items():
         ax2.plot(x_values, lr, label=f"{player} LR",
-                color=colors.get(player, 'green'),
+                color=colors.get(player),
                 linestyle=':', alpha=0.7)
     
     ax2.set_ylabel("Learning Rate")
@@ -797,10 +802,13 @@ def create_training_plots(metrics, run_dir, epoch):
         )
         
         for player, val in hist.get('best_rewards', {}).items():
-            if isinstance(val, dict) and 'value' in val:
-                info_text += f"  {player}: {val['value']:.2f}\n"
-            else:
+            # Safely check the type to avoid isinstance errors
+            if hasattr(val, 'value'):
+                info_text += f"  {player}: {val.value:.2f}\n"
+            elif isinstance(val, (int, float)):
                 info_text += f"  {player}: {val:.2f}\n"
+            else:
+                info_text += f"  {player}: {str(val)}\n"
         
         plt.figtext(0.02, 0.02, info_text, fontsize=9, 
                     bbox=dict(facecolor='white', alpha=0.8))
@@ -824,7 +832,7 @@ def create_training_plots(metrics, run_dir, epoch):
     plt.subplot(1, 2, 2)
     for player, survival in metrics["survival_time"].items():
         plt.plot(x_values, survival, label=f"{player} Survival",
-                color=colors.get(player, 'green'))
+                color=colors.get(player))
     
     plt.title("Survival Time per Epoch")
     plt.xlabel("Epoch")
