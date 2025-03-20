@@ -15,7 +15,7 @@ from components.character import Character
 
 screen = pygame.display.set_mode((800, 800))
 
-def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, model_lock, shared_history):
+def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, shared_history):
     """Worker function to train a single episode"""
     try:
         # Determine current curriculum stage
@@ -57,13 +57,12 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                 bot.optimizer = torch.optim.Adam(bot.model.parameters(), lr=bot.learning_rate)
                 
                 # Load shared model state with error handling
-                with model_lock:
-                    if shared_models[idx] is not None:
-                        try:
-                            bot.model.load_state_dict(shared_models[idx])
-                        except Exception as e:
-                            print(f"Error loading model state for bot {idx}: {e}")
-                            print("Starting with fresh model state")
+                if shared_models[idx] is not None:
+                    try:
+                        bot.model.load_state_dict(shared_models[idx])
+                    except Exception as e:
+                        print(f"Error loading model state for bot {idx}: {e}")
+                        print("Starting with fresh model state")
                 bots.append(bot)
             except Exception as e:
                 print(f"Error creating bot {idx}: {e}")
@@ -134,18 +133,9 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
             if finished:
                 break
         
-        # Update shared models with thread-safe mechanism and error handling
-        try:
-            with model_lock:
-                for idx, bot in enumerate(bots):
-                    try:
-                        shared_models[idx] = copy.deepcopy(bot.model.state_dict())
-                    except Exception as e:
-                        print(f"Error updating shared model for bot {idx}: {e}")
-        except Exception as e:
-            print(f"Error in model synchronization: {e}")
-        
-        return episode_metrics, env.steps
+        # Return model states and metrics
+        model_states = [copy.deepcopy(bot.model.state_dict()) for bot in bots]
+        return episode_metrics, env.steps, model_states
         
     except Exception as e:
         print(f"Critical error in train_episode: {e}")
@@ -157,7 +147,7 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
             "survival_time": {"Ninja": 0, "Faze Jarvis": 0},
             "epsilon": {"Ninja": 0, "Faze Jarvis": 0},
             "learning_rate": {"Ninja": 0, "Faze Jarvis": 0}
-        }, 0
+        }, 0, [None, None]
 
 def main():
     # Environment parameters
@@ -219,7 +209,6 @@ def main():
     
     # Shared model states with proper synchronization
     shared_models = manager.list([None, None])
-    model_lock = Lock()
     
     # Shared training history
     shared_history = manager.dict({
@@ -276,7 +265,6 @@ def main():
                                       display_width=display_width,
                                       display_height=display_height,
                                       shared_models=shared_models,
-                                      model_lock=model_lock,
                                       shared_history=shared_history)
         
         # Training loop with improved error handling
@@ -289,12 +277,11 @@ def main():
                 results = results.get(timeout=3600)  # 1-hour timeout per epoch
                 
                 # Aggregate results with error handling
-                for episode_metrics, steps in results:
+                for episode_metrics, steps, model_states in results:
                     try:
                         # Update shared history
-                        with model_lock:
-                            shared_history["total_steps"].value += steps
-                            shared_history["total_episodes"].value += 1
+                        shared_history["total_steps"].value += steps
+                        shared_history["total_episodes"].value += 1
                         
                         metrics["episode_steps"].append(steps)
                         for player in ["Ninja", "Faze Jarvis"]:
@@ -306,9 +293,8 @@ def main():
                             metrics["learning_rates"][player].append(episode_metrics["learning_rate"][player])
                             
                             # Update best rewards
-                            with model_lock:
-                                if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
-                                    shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
+                            if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
+                                shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
                             
                             # Calculate average rewards
                             avg_reward = sum(metrics["episode_rewards"][player][-10:]) / min(10, len(metrics["episode_rewards"][player]))
@@ -320,6 +306,12 @@ def main():
                                   f"Kills = {episode_metrics['kills'][player]}, "
                                   f"Damage = {episode_metrics['damage_dealt'][player]:.1f}, "
                                   f"Epsilon = {episode_metrics['epsilon'][player]:.4f}")
+                    
+                        # Update shared models
+                        for idx, model_state in enumerate(model_states):
+                            if model_state is not None:
+                                shared_models[idx] = model_state
+                                
                     except Exception as e:
                         print(f"Error processing episode metrics: {e}")
                         continue
@@ -347,17 +339,16 @@ def main():
                             json.dump(save_metrics, f, indent=4)
                         create_training_plots(save_metrics, run_dir, epoch+1)
                         
-                        # Save model checkpoints with proper synchronization
-                        with model_lock:
-                            for idx, model_state in enumerate(shared_models):
-                                if model_state is not None:
-                                    save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{epoch+1}.pth"
-                                    torch.save(model_state, save_path)
-                                    # Also save to standard location for easy loading
-                                    torch.save(model_state, f"bot_model_{idx}.pth")
-                                    
-                            # Update last save timestamp
-                            shared_history["last_save"].value = epoch + 1
+                        # Save model checkpoints
+                        for idx, model_state in enumerate(shared_models):
+                            if model_state is not None:
+                                save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{epoch+1}.pth"
+                                torch.save(model_state, save_path)
+                                # Also save to standard location for easy loading
+                                torch.save(model_state, f"bot_model_{idx}.pth")
+                                
+                        # Update last save timestamp
+                        shared_history["last_save"].value = epoch + 1
                     except Exception as e:
                         print(f"Error saving metrics or models: {e}")
                 
@@ -365,10 +356,9 @@ def main():
                 print(f"Error in epoch {epoch + 1}: {e}")
                 # Try to recover by saving current state
                 try:
-                    with model_lock:
-                        for idx, model_state in enumerate(shared_models):
-                            if model_state is not None:
-                                torch.save(model_state, f"bot_model_{idx}_recovery.pth")
+                    for idx, model_state in enumerate(shared_models):
+                        if model_state is not None:
+                            torch.save(model_state, f"bot_model_{idx}_recovery.pth")
                 except:
                     pass
                 raise
