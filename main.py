@@ -702,66 +702,139 @@ def create_training_plots(metrics, run_dir, epoch):
     """Create and save training performance plots"""
     plt.figure(figsize=(15, 10))
     
+    # Get total number of episodes for x-axis
+    total_episodes = len(metrics["episode_rewards"]["Ninja"])
+    x_values = list(range(1, total_episodes + 1))
+    
     # Plot rewards
     plt.subplot(2, 2, 1)
+    colors = {'Ninja': 'blue', 'Faze Jarvis': 'red'}
+    
     for player, rewards in metrics["episode_rewards"].items():
-        plt.plot(rewards, label=f"{player} Rewards")
+        plt.plot(x_values, rewards, label=f"{player} Rewards", color=colors.get(player, 'green'))
+    
     for player, avg_rewards in metrics["avg_rewards"].items():
-        plt.plot(avg_rewards, label=f"{player} Avg Rewards", linestyle='--')
-    plt.title("Rewards per Episode")
-    plt.xlabel("Episode")
+        plt.plot(x_values, avg_rewards, label=f"{player} Avg(10) Rewards", 
+                 linestyle='--', color=colors.get(player, 'green'), alpha=0.7)
+    
+    plt.title("Rewards per Epoch")
+    plt.xlabel("Epoch")
     plt.ylabel("Reward")
     plt.legend()
     plt.grid(True)
     
     # Plot kills - improved clarity
     plt.subplot(2, 2, 2)
-    colors = {'Ninja': 'blue', 'Faze Jarvis': 'red'}
-    markers = {'Ninja': 'o', 'Faze Jarvis': 's'}
     
     for player, kills in metrics["kills"].items():
         # Use a bar chart for better visibility of discrete kill counts
-        episodes = list(range(1, len(kills) + 1))
-        plt.bar([e - 0.2 if player == 'Ninja' else e + 0.2 for e in episodes], 
+        plt.bar([e - 0.2 if player == 'Ninja' else e + 0.2 for e in x_values], 
                 kills, 
                 width=0.4,
                 color=colors.get(player, 'green'),
                 label=f"{player} Kills")
     
-    plt.title("Kills per Episode")
-    plt.xlabel("Episode")
+    plt.title("Kills per Epoch")
+    plt.xlabel("Epoch")
     plt.ylabel("Kills")
     plt.legend()
     plt.grid(True)
     
     # Plot damage dealt
     plt.subplot(2, 2, 3)
+    markers = {'Ninja': 'o', 'Faze Jarvis': 's'}
+    
     for player, damage in metrics["damage_dealt"].items():
-        plt.plot(damage, label=f"{player} Damage", 
+        plt.plot(x_values, damage, label=f"{player} Damage", 
                 color=colors.get(player, 'green'),
                 marker=markers.get(player, 'x'),
                 markersize=4,
                 markevery=max(1, len(damage)//20))  # Show markers every ~20 points
-    plt.title("Damage Dealt per Episode")
-    plt.xlabel("Episode")
+    
+    plt.title("Damage Dealt per Epoch")
+    plt.xlabel("Epoch")
     plt.ylabel("Damage")
     plt.legend()
     plt.grid(True)
     
-    # Plot epsilon decay
+    # Plot epsilon and learning rate
     plt.subplot(2, 2, 4)
+    
+    # Primary y-axis for epsilon
+    ax1 = plt.gca()
     for player, epsilon in metrics["epsilon"].items():
-        plt.plot(epsilon, label=f"{player} Epsilon",
-                color=colors.get(player, 'green'))
-    plt.title("Exploration Rate (Epsilon) Decay")
-    plt.xlabel("Episode")
-    plt.ylabel("Epsilon")
-    plt.legend()
-    plt.grid(True)
+        ax1.plot(x_values, epsilon, label=f"{player} Epsilon",
+                color=colors.get(player, 'green'),
+                linestyle='-')
+    
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Epsilon")
+    
+    # Secondary y-axis for learning rate
+    ax2 = ax1.twinx()
+    for player, lr in metrics["learning_rates"].items():
+        ax2.plot(x_values, lr, label=f"{player} LR",
+                color=colors.get(player, 'green'),
+                linestyle=':', alpha=0.7)
+    
+    ax2.set_ylabel("Learning Rate")
+    
+    # Combine legends
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+    
+    plt.title("Exploration and Learning Rates")
+    ax1.grid(True)
+    
+    # Add overall metrics as text annotation
+    if "shared_history" in metrics:
+        hist = metrics["shared_history"]
+        info_text = (
+            f"Total Epochs: {hist.get('current_epoch', total_episodes)}\n"
+            f"Total Steps: {hist.get('total_steps', sum(metrics['episode_steps']))}\n"
+            f"Best Rewards:\n"
+        )
+        
+        for player, val in hist.get('best_rewards', {}).items():
+            if isinstance(val, dict) and 'value' in val:
+                info_text += f"  {player}: {val['value']:.2f}\n"
+            else:
+                info_text += f"  {player}: {val:.2f}\n"
+        
+        plt.figtext(0.02, 0.02, info_text, fontsize=9, 
+                    bbox=dict(facecolor='white', alpha=0.8))
     
     plt.tight_layout()
     plt.savefig(f"{run_dir}/plots/training_progress_epoch_{epoch}.png")
-    plt.close()
+    
+    # Create additional plots for more metrics
+    plt.figure(figsize=(15, 5))
+    
+    # Plot episode steps
+    plt.subplot(1, 2, 1)
+    plt.plot(x_values, metrics["episode_steps"], 'g-', label="Episode Length")
+    plt.title("Steps per Epoch")
+    plt.xlabel("Epoch")
+    plt.ylabel("Steps")
+    plt.grid(True)
+    plt.legend()
+    
+    # Plot survival time
+    plt.subplot(1, 2, 2)
+    for player, survival in metrics["survival_time"].items():
+        plt.plot(x_values, survival, label=f"{player} Survival",
+                color=colors.get(player, 'green'))
+    
+    plt.title("Survival Time per Epoch")
+    plt.xlabel("Epoch")
+    plt.ylabel("Time Steps")
+    plt.grid(True)
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(f"{run_dir}/plots/additional_metrics_epoch_{epoch}.png")
+    plt.close('all')
 
 if __name__ == "__main__":
     # Parse command-line arguments
