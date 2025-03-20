@@ -5,6 +5,9 @@ import os
 import json
 from datetime import datetime
 import torch
+from multiprocessing import Pool, cpu_count, Manager, Lock
+from functools import partial
+import copy
 
 from Environment import Env
 from components.my_bot import MyBot
@@ -12,28 +15,172 @@ from components.character import Character
 
 screen = pygame.display.set_mode((800, 800))
 
+def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, model_lock, shared_history):
+    """Worker function to train a single episode"""
+    try:
+        # Determine current curriculum stage
+        current_stage = 0
+        for i, stage in enumerate(curriculum_stages):
+            if epoch >= sum(s["duration"] for s in curriculum_stages[:i]):
+                current_stage = i
+        
+        current_obstacles = curriculum_stages[current_stage]["n_obstacles"]
+        
+        # Create environment for this episode
+        env = Env(training=True,
+                  use_game_ui=False,
+                  world_width=world_bounds[2] - world_bounds[0],
+                  world_height=world_bounds[3] - world_bounds[1],
+                  display_width=display_width,
+                  display_height=display_height,
+                  n_of_obstacles=current_obstacles,
+                  frame_skip=config["frame_skip"])
+        
+        # Setup players
+        players = [
+            Character((world_bounds[2] - 100, world_bounds[3] - 100),
+                      env.world_surface, boundaries=world_bounds, username="Ninja"),
+            Character((world_bounds[0] + 10, world_bounds[1]+10),
+                      env.world_surface, boundaries=world_bounds, username="Faze Jarvis")
+        ]
+        
+        # Create bots with shared models
+        bots = []
+        for idx in range(2):
+            try:
+                bot = MyBot(action_size=config["action_size"])
+                bot.use_double_dqn = config["hyperparameters"]["double_dqn"]
+                bot.learning_rate = config["hyperparameters"]["learning_rate"]
+                bot.batch_size = config["hyperparameters"]["batch_size"]
+                bot.gamma = config["hyperparameters"]["gamma"]
+                bot.epsilon_decay = config["hyperparameters"]["epsilon_decay"]
+                bot.optimizer = torch.optim.Adam(bot.model.parameters(), lr=bot.learning_rate)
+                
+                # Load shared model state with error handling
+                with model_lock:
+                    if shared_models[idx] is not None:
+                        try:
+                            bot.model.load_state_dict(shared_models[idx])
+                        except Exception as e:
+                            print(f"Error loading model state for bot {idx}: {e}")
+                            print("Starting with fresh model state")
+                bots.append(bot)
+            except Exception as e:
+                print(f"Error creating bot {idx}: {e}")
+                raise
+        
+        # Link everything together
+        env.set_players_bots_objects(players, bots)
+        env.reset(randomize_objects=True)
+        env.steps = 0
+        
+        if hasattr(env, 'last_damage_tracker'):
+            env.last_damage_tracker = {player.username: 0 for player in players}
+        
+        for bot in bots:
+            bot.reset_for_new_episode()
+        
+        # Track episode metrics
+        episode_metrics = {
+            "rewards": {player.username: 0 for player in players},
+            "kills": {player.username: 0 for player in players},
+            "damage_dealt": {player.username: 0 for player in players},
+            "survival_time": {player.username: 0 for player in players},
+            "epsilon": {player.username: 0 for player in players},
+            "learning_rate": {player.username: 0 for player in players}
+        }
+        
+        while True:
+            if env.steps > config["tick_limit"]:
+                break
+                
+            finished, info = env.step(debugging=False)
+            
+            for player, bot in zip(players, bots):
+                try:
+                    reward = env.calculate_reward(info, player.username)
+                    curriculum_factor = 1.0 - (current_stage * 0.1)
+                    reward *= curriculum_factor
+                    
+                    episode_metrics["rewards"][player.username] += reward
+                    player_info = info["players_info"][player.username]
+                    episode_metrics["kills"][player.username] = player_info.get("kills", 0)
+                    
+                    current_damage = player_info.get("damage_dealt", 0)
+                    if player.username not in getattr(env, 'last_damage_tracker', {}):
+                        if not hasattr(env, 'last_damage_tracker'):
+                            env.last_damage_tracker = {}
+                        env.last_damage_tracker[player.username] = 0
+                        
+                    damage_delta = current_damage - env.last_damage_tracker[player.username]
+                    if damage_delta > 0:
+                        episode_metrics["damage_dealt"][player.username] += damage_delta
+                    env.last_damage_tracker[player.username] = current_damage
+                    
+                    if player_info.get("alive", False):
+                        episode_metrics["survival_time"][player.username] += 1
+                        
+                    next_info = player.get_info()
+                    if 'closest_opponent' not in next_info:
+                        next_info['closest_opponent'] = env.find_closest_opponent(player)
+                    bot.remember(reward, next_info, finished)
+                    
+                    episode_metrics["epsilon"][player.username] = bot.epsilon
+                    episode_metrics["learning_rate"][player.username] = bot.learning_rate
+                except Exception as e:
+                    print(f"Error processing player {player.username}: {e}")
+                    continue
+            
+            if finished:
+                break
+        
+        # Update shared models with thread-safe mechanism and error handling
+        try:
+            with model_lock:
+                for idx, bot in enumerate(bots):
+                    try:
+                        shared_models[idx] = copy.deepcopy(bot.model.state_dict())
+                    except Exception as e:
+                        print(f"Error updating shared model for bot {idx}: {e}")
+        except Exception as e:
+            print(f"Error in model synchronization: {e}")
+        
+        return episode_metrics, env.steps
+        
+    except Exception as e:
+        print(f"Critical error in train_episode: {e}")
+        # Return safe default metrics in case of error
+        return {
+            "rewards": {"Ninja": 0, "Faze Jarvis": 0},
+            "kills": {"Ninja": 0, "Faze Jarvis": 0},
+            "damage_dealt": {"Ninja": 0, "Faze Jarvis": 0},
+            "survival_time": {"Ninja": 0, "Faze Jarvis": 0},
+            "epsilon": {"Ninja": 0, "Faze Jarvis": 0},
+            "learning_rate": {"Ninja": 0, "Faze Jarvis": 0}
+        }, 0
+
 def main():
-    # Environment parameters.
+    # Environment parameters
     world_width = 1280
     world_height = 1280
     display_width = 800
     display_height = 800
-    n_of_obstacles  = 15
-
+    n_of_obstacles = 15
+    
     load_back = True
-    state_size = 38  # Updated state size: 34 base + 2 for relative position + 2 for time features
-
-    # Create training run directory for logs and checkpoints
+    state_size = 38
+    
+    # Create training run directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = f"training_runs/{timestamp}"
     os.makedirs(run_dir, exist_ok=True)
     os.makedirs(f"{run_dir}/models", exist_ok=True)
     os.makedirs(f"{run_dir}/plots", exist_ok=True)
     
-    # Training configuration - easily adjustable
+    # Training configuration
     config = {
         "frame_skip": 4,
-        "tick_limit": 2400, 
+        "tick_limit": 2400,
         "num_epochs": 1000,
         "action_size": 56,
         "hyperparameters": {
@@ -41,15 +188,14 @@ def main():
             "learning_rate": 0.0001,
             "batch_size": 64,
             "gamma": 0.99,
-            "epsilon_decay": 0.9999,  # Much slower epsilon decay (from 0.995)
+            "epsilon_decay": 0.9999,
         }
     }
     
-    # Save configuration
     with open(f"{run_dir}/config.json", "w") as f:
         json.dump(config, f, indent=4)
-
-    # Create the environment with frame skipping for faster training
+    
+    # Create initial environment to get world bounds
     env = Env(training=True,
               use_game_ui=False,
               world_width=world_width,
@@ -58,214 +204,194 @@ def main():
               display_height=display_height,
               n_of_obstacles=n_of_obstacles,
               frame_skip=config["frame_skip"])
-    screen = env.world_surface
     world_bounds = env.get_world_bounds()
-
-    # Setup two players (characters) with starting positions.
-    # The players will be stuck if closer than 5 pixels to the border.
-    players = [
-        Character((world_bounds[2] - 100, world_bounds[3] - 100),
-                  screen, boundaries=world_bounds, username="Ninja"),
-        Character((world_bounds[0] + 10, world_bounds[1]+10),
-                  screen, boundaries=world_bounds, username="Faze Jarvis")
-    ]
-
-    # Create bots with configured hyperparameters
-    bots = [
-        MyBot(action_size=config["action_size"]),
-        MyBot(action_size=config["action_size"])
-    ]
-    
-    # Configure bot hyperparameters
-    for bot in bots:
-        bot.use_double_dqn = config["hyperparameters"]["double_dqn"]
-        bot.learning_rate = config["hyperparameters"]["learning_rate"]
-        bot.batch_size = config["hyperparameters"]["batch_size"]
-        bot.gamma = config["hyperparameters"]["gamma"]
-        bot.epsilon_decay = config["hyperparameters"]["epsilon_decay"]
-        # Recreate optimizer with new learning rate
-        bot.optimizer = torch.optim.Adam(bot.model.parameters(), lr=bot.learning_rate)
-
-    if load_back:
-        for idx, bot in enumerate(bots):
-            save_path = f"bot_model_{idx}.pth"
-            try:
-                bot.load(save_path)
-                print(f"Load model for player {players[idx].username} from {save_path}")
-            except:
-                print(f"Failed to load model for player {players[idx].username} from {save_path}")
-
-    # Link players, bots, and obstacles into the environment.
-    env.set_players_bots_objects(players, bots)
-
-    # Training metrics tracking
-    metrics = {
-        "episode_rewards": {player.username: [] for player in players},
-        "avg_rewards": {player.username: [] for player in players},
-        "episode_steps": [],
-        "kills": {player.username: [] for player in players},
-        "damage_dealt": {player.username: [] for player in players},
-        "survival_time": {player.username: [] for player in players},
-        "epsilon": {player.username: [] for player in players}
-    }
     
     # Curriculum learning parameters
     curriculum_stages = [
-        {"n_obstacles": 10, "duration": 100},  # Stage 1: Simple environment
-        {"n_obstacles": 15, "duration": 200},  # Stage 2: More obstacles
-        {"n_obstacles": 20, "duration": 300},  # Stage 3: More challenging
-        {"n_obstacles": 25, "duration": 400}   # Stage 4: Full difficulty
+        {"n_obstacles": 10, "duration": 100},
+        {"n_obstacles": 15, "duration": 200},
+        {"n_obstacles": 20, "duration": 300},
+        {"n_obstacles": 25, "duration": 400}
     ]
-
-    for epoch in range(config["num_epochs"]):
-        print(f"Starting epoch {epoch + 1}/{config['num_epochs']}")
-        
-        # Implement curriculum learning - adjust difficulty based on training progress
-        current_stage = 0
-        for i, stage in enumerate(curriculum_stages):
-            if epoch >= sum(s["duration"] for s in curriculum_stages[:i]):
-                current_stage = i
-        
-        # Set environment parameters based on current curriculum stage
-        current_obstacles = curriculum_stages[current_stage]["n_obstacles"]
-        print(f"Curriculum stage {current_stage + 1}: {current_obstacles} obstacles")
-        
-        # Configure environment for current stage
-        env.n_of_obstacles = current_obstacles
-        
-        # Reset environment with randomized obstacles
-        env.reset(randomize_objects=True)
-        
-        # Reset the step counter at the beginning of each episode
-        env.steps = 0
-        
-        # Reset damage tracking for the new episode
-        if hasattr(env, 'last_damage_tracker'):
-            env.last_damage_tracker = {player.username: 0 for player in players}
-        
-        # Reset bots for the new episode
-        for bot in bots:
-            bot.reset_for_new_episode()
-
-        # Track episode-specific metrics
-        episode_metrics = {
-            "rewards": {player.username: 0 for player in players},
-            "kills": {player.username: 0 for player in players},
-            "damage_dealt": {player.username: 0 for player in players},
-            "survival_time": {player.username: 0 for player in players}
-        }
-
-        while True:
-            # If the tick limit for this episode has been reached, break.
-            if env.steps > config["tick_limit"]:
-                print("Tick limit reached for this episode.")
-                break
-
-            # Take a step in the environment.
-            finished, info = env.step(debugging=False)
-
-            # For each player, calculate reward, update bot memory, and train the bot.
-            for player, bot in zip(players, bots):
-                # Calculate the reward for the current step
-                reward = env.calculate_reward(info, player.username)
-                
-                # Apply curriculum-based reward scaling (higher rewards in early stages)
-                curriculum_factor = 1.0 - (current_stage * 0.1)  # Gradually decrease reward scaling
-                reward *= curriculum_factor
-                
-                # Update episode metrics
-                episode_metrics["rewards"][player.username] += reward
-                player_info = info["players_info"][player.username]
-                episode_metrics["kills"][player.username] = player_info.get("kills", 0)
-                
-                # Fix damage tracking - track cumulative damage per episode
-                current_damage = player_info.get("damage_dealt", 0)
-                if player.username not in getattr(env, 'last_damage_tracker', {}):
-                    if not hasattr(env, 'last_damage_tracker'):
-                        env.last_damage_tracker = {}
-                    env.last_damage_tracker[player.username] = 0
-                    
-                damage_delta = current_damage - env.last_damage_tracker[player.username]
-                if damage_delta > 0:
-                    episode_metrics["damage_dealt"][player.username] += damage_delta
-                env.last_damage_tracker[player.username] = current_damage
-                
-                if player_info.get("alive", False):
-                    episode_metrics["survival_time"][player.username] += 1
-
-                # Retrieve the updated state for the player.
-                next_info = player.get_info()
-                # Add closest opponent info if it was lost somewhere
-                if 'closest_opponent' not in next_info:
-                    next_info['closest_opponent'] = env.find_closest_opponent(player)
-                # Store the transition (last state, action, reward, next state, done).
-                bot.remember(reward, next_info, finished)
-
-            # If the game/episode is over, break out of the loop.
-            if finished:
-                print(f"Episode {epoch + 1} finished, took {env.steps} ticks.")
-                break
-
-        # Record episode metrics
-        metrics["episode_steps"].append(env.steps)
-        for player in players:
-            metrics["episode_rewards"][player.username].append(episode_metrics["rewards"][player.username])
-            metrics["kills"][player.username].append(episode_metrics["kills"][player.username])
-            metrics["damage_dealt"][player.username].append(episode_metrics["damage_dealt"][player.username])
-            metrics["survival_time"][player.username].append(episode_metrics["survival_time"][player.username])
-            metrics["epsilon"][player.username].append(player.related_bot.epsilon)
-            
-            # Calculate average rewards
-            avg_reward = sum(metrics["episode_rewards"][player.username][-10:]) / min(10, len(metrics["episode_rewards"][player.username]))
-            metrics["avg_rewards"][player.username].append(avg_reward)
-            
-            # Print episode summary
-            print(f"Episode {epoch + 1} - {player.username}: " 
-                  f"Reward = {episode_metrics['rewards'][player.username]:.2f}, "
-                  f"Avg(10) = {avg_reward:.2f}, "
-                  f"Kills = {episode_metrics['kills'][player.username]}, "
-                  f"Damage = {episode_metrics['damage_dealt'][player.username]:.1f}, "
-                  f"Epsilon = {player.related_bot.epsilon:.4f}")
-            
-            # Update learning rate using scheduler
-            player.related_bot.scheduler.step(avg_reward)
-
-        # Save metrics at regular intervals
-        if (epoch + 1) % 10 == 0 or epoch == config["num_epochs"] - 1:
-            # Save model checkpoints
-            for idx, bot in enumerate(bots):
-                save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{epoch+1}.pth"
-                bot.save(save_path)
-                
-            # Save metrics data
-            with open(f"{run_dir}/metrics.json", "w") as f:
-                json.dump(metrics, f, indent=4)
-                
-            # Create and save plots
-            create_training_plots(metrics, run_dir, epoch+1)
-                
-        # Self-play - save periodic checkpoints for advanced training
-        if (epoch + 1) % 100 == 0:
-            for idx, bot in enumerate(bots):
-                checkpoint_path = f"{run_dir}/models/checkpoint_model_{idx}_epoch_{epoch+1}.pth"
-                bot.save(checkpoint_path)
-                print(f"Saved checkpoint for player {players[idx].username} to {checkpoint_path}")
-                
-    # After training is complete, save final models
-    for idx, bot in enumerate(bots):
-        final_path = f"{run_dir}/models/final_model_{idx}.pth"
-        bot.save(final_path)
-        print(f"Saved final model for player {players[idx].username} to {final_path}")
-        
-        # Also save to standard location for easy loading
-        bot.save(f"bot_model_{idx}.pth")
-
-    # Final plots and metrics
-    create_training_plots(metrics, run_dir, config["num_epochs"])
-    print(f"Training complete! Results saved to {run_dir}")
-
-    pygame.quit()
     
+    # Setup shared memory and synchronization
+    manager = Manager()
+    
+    # Shared model states with proper synchronization
+    shared_models = manager.list([None, None])
+    model_lock = Lock()
+    
+    # Shared training history
+    shared_history = manager.dict({
+        "total_steps": manager.Value('i', 0),
+        "total_episodes": manager.Value('i', 0),
+        "best_rewards": manager.dict({
+            "Ninja": manager.Value('f', float('-inf')),
+            "Faze Jarvis": manager.Value('f', float('-inf'))
+        }),
+        "last_save": manager.Value('i', 0)
+    })
+    
+    # Shared metrics with proper synchronization
+    metrics = manager.dict({
+        "episode_rewards": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
+        "avg_rewards": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
+        "episode_steps": manager.list(),
+        "kills": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
+        "damage_dealt": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
+        "survival_time": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
+        "epsilon": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
+        "learning_rates": {"Ninja": manager.list(), "Faze Jarvis": manager.list()}
+    })
+    
+    # Initialize models if loading from previous training
+    if load_back:
+        try:
+            for idx in range(2):
+                save_path = f"bot_model_{idx}.pth"
+                if os.path.exists(save_path):
+                    # Create a temporary bot to load the model
+                    temp_bot = MyBot(action_size=config["action_size"])
+                    temp_bot.load(save_path)
+                    # Store the model state in shared memory
+                    shared_models[idx] = copy.deepcopy(temp_bot.model.state_dict())
+                    print(f"Loaded model {idx} from {save_path}")
+                else:
+                    print(f"No saved model found for bot {idx}, starting fresh")
+        except Exception as e:
+            print(f"Error loading models: {e}")
+            print("Starting with fresh models")
+    
+    # Setup parallel processing with error handling
+    try:
+        num_processes = max(1, cpu_count() - 1)  # Leave one CPU free
+        print(f"Starting training with {num_processes} processes")
+        pool = Pool(processes=num_processes)
+        
+        # Create partial function with fixed arguments
+        train_episode_partial = partial(train_episode,
+                                      config=config,
+                                      curriculum_stages=curriculum_stages,
+                                      world_bounds=world_bounds,
+                                      display_width=display_width,
+                                      display_height=display_height,
+                                      shared_models=shared_models,
+                                      model_lock=model_lock,
+                                      shared_history=shared_history)
+        
+        # Training loop with improved error handling
+        for epoch in range(config["num_epochs"]):
+            print(f"Starting epoch {epoch + 1}/{config['num_epochs']}")
+            
+            try:
+                # Run multiple episodes in parallel with timeout
+                results = pool.map_async(train_episode_partial, [epoch] * num_processes)
+                results = results.get(timeout=3600)  # 1-hour timeout per epoch
+                
+                # Aggregate results with error handling
+                for episode_metrics, steps in results:
+                    try:
+                        # Update shared history
+                        with model_lock:
+                            shared_history["total_steps"].value += steps
+                            shared_history["total_episodes"].value += 1
+                        
+                        metrics["episode_steps"].append(steps)
+                        for player in ["Ninja", "Faze Jarvis"]:
+                            metrics["episode_rewards"][player].append(episode_metrics["rewards"][player])
+                            metrics["kills"][player].append(episode_metrics["kills"][player])
+                            metrics["damage_dealt"][player].append(episode_metrics["damage_dealt"][player])
+                            metrics["survival_time"][player].append(episode_metrics["survival_time"][player])
+                            metrics["epsilon"][player].append(episode_metrics["epsilon"][player])
+                            metrics["learning_rates"][player].append(episode_metrics["learning_rate"][player])
+                            
+                            # Update best rewards
+                            with model_lock:
+                                if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
+                                    shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
+                            
+                            # Calculate average rewards
+                            avg_reward = sum(metrics["episode_rewards"][player][-10:]) / min(10, len(metrics["episode_rewards"][player]))
+                            metrics["avg_rewards"][player].append(avg_reward)
+                            
+                            print(f"Episode {epoch + 1} - {player}: "
+                                  f"Reward = {episode_metrics['rewards'][player]:.2f}, "
+                                  f"Avg(10) = {avg_reward:.2f}, "
+                                  f"Kills = {episode_metrics['kills'][player]}, "
+                                  f"Damage = {episode_metrics['damage_dealt'][player]:.1f}, "
+                                  f"Epsilon = {episode_metrics['epsilon'][player]:.4f}")
+                    except Exception as e:
+                        print(f"Error processing episode metrics: {e}")
+                        continue
+                
+                # Save metrics and plots periodically with error handling
+                if (epoch + 1) % 10 == 0 or epoch == config["num_epochs"] - 1:
+                    try:
+                        # Convert shared memory metrics to regular dict for saving
+                        save_metrics = {
+                            k: (v if not isinstance(v, manager.list) else list(v)) 
+                            for k, v in metrics.items()
+                        }
+                        
+                        # Add shared history to saved metrics
+                        save_metrics["shared_history"] = {
+                            "total_steps": shared_history["total_steps"].value,
+                            "total_episodes": shared_history["total_episodes"].value,
+                            "best_rewards": {
+                                player: shared_history["best_rewards"][player].value 
+                                for player in ["Ninja", "Faze Jarvis"]
+                            }
+                        }
+                        
+                        with open(f"{run_dir}/metrics.json", "w") as f:
+                            json.dump(save_metrics, f, indent=4)
+                        create_training_plots(save_metrics, run_dir, epoch+1)
+                        
+                        # Save model checkpoints with proper synchronization
+                        with model_lock:
+                            for idx, model_state in enumerate(shared_models):
+                                if model_state is not None:
+                                    save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{epoch+1}.pth"
+                                    torch.save(model_state, save_path)
+                                    # Also save to standard location for easy loading
+                                    torch.save(model_state, f"bot_model_{idx}.pth")
+                                    
+                            # Update last save timestamp
+                            shared_history["last_save"].value = epoch + 1
+                    except Exception as e:
+                        print(f"Error saving metrics or models: {e}")
+                
+            except Exception as e:
+                print(f"Error in epoch {epoch + 1}: {e}")
+                # Try to recover by saving current state
+                try:
+                    with model_lock:
+                        for idx, model_state in enumerate(shared_models):
+                            if model_state is not None:
+                                torch.save(model_state, f"bot_model_{idx}_recovery.pth")
+                except:
+                    pass
+                raise
+    
+    except Exception as e:
+        print(f"Critical error during training: {e}")
+        raise
+    finally:
+        # Cleanup with error handling
+        try:
+            pool.close()
+            pool.join()
+            pygame.quit()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+        
+        print(f"Training complete! Results saved to {run_dir}")
+        print(f"Total steps: {shared_history['total_steps'].value}")
+        print(f"Total episodes: {shared_history['total_episodes'].value}")
+        print("Best rewards:")
+        for player in ["Ninja", "Faze Jarvis"]:
+            print(f"{player}: {shared_history['best_rewards'][player].value:.2f}")
+
 def create_training_plots(metrics, run_dir, epoch):
     """Create and save training performance plots"""
     plt.figure(figsize=(15, 10))
