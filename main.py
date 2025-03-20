@@ -41,7 +41,7 @@ def main():
             "learning_rate": 0.0001,
             "batch_size": 64,
             "gamma": 0.99,
-            "epsilon_decay": 0.995,
+            "epsilon_decay": 0.9999,  # Much slower epsilon decay (from 0.995)
         }
     }
     
@@ -139,6 +139,10 @@ def main():
         # Reset the step counter at the beginning of each episode
         env.steps = 0
         
+        # Reset damage tracking for the new episode
+        if hasattr(env, 'last_damage_tracker'):
+            env.last_damage_tracker = {player.username: 0 for player in players}
+        
         # Reset bots for the new episode
         for bot in bots:
             bot.reset_for_new_episode()
@@ -173,7 +177,19 @@ def main():
                 episode_metrics["rewards"][player.username] += reward
                 player_info = info["players_info"][player.username]
                 episode_metrics["kills"][player.username] = player_info.get("kills", 0)
-                episode_metrics["damage_dealt"][player.username] = player_info.get("damage_dealt", 0)
+                
+                # Fix damage tracking - track cumulative damage per episode
+                current_damage = player_info.get("damage_dealt", 0)
+                if player.username not in getattr(env, 'last_damage_tracker', {}):
+                    if not hasattr(env, 'last_damage_tracker'):
+                        env.last_damage_tracker = {}
+                    env.last_damage_tracker[player.username] = 0
+                    
+                damage_delta = current_damage - env.last_damage_tracker[player.username]
+                if damage_delta > 0:
+                    episode_metrics["damage_dealt"][player.username] += damage_delta
+                env.last_damage_tracker[player.username] = current_damage
+                
                 if player_info.get("alive", False):
                     episode_metrics["survival_time"][player.username] += 1
 
@@ -266,10 +282,20 @@ def create_training_plots(metrics, run_dir, epoch):
     plt.legend()
     plt.grid(True)
     
-    # Plot kills
+    # Plot kills - improved clarity
     plt.subplot(2, 2, 2)
+    colors = {'Ninja': 'blue', 'Faze Jarvis': 'red'}
+    markers = {'Ninja': 'o', 'Faze Jarvis': 's'}
+    
     for player, kills in metrics["kills"].items():
-        plt.plot(kills, label=f"{player} Kills")
+        # Use a bar chart for better visibility of discrete kill counts
+        episodes = list(range(1, len(kills) + 1))
+        plt.bar([e - 0.2 if player == 'Ninja' else e + 0.2 for e in episodes], 
+                kills, 
+                width=0.4,
+                color=colors.get(player, 'green'),
+                label=f"{player} Kills")
+    
     plt.title("Kills per Episode")
     plt.xlabel("Episode")
     plt.ylabel("Kills")
@@ -279,7 +305,11 @@ def create_training_plots(metrics, run_dir, epoch):
     # Plot damage dealt
     plt.subplot(2, 2, 3)
     for player, damage in metrics["damage_dealt"].items():
-        plt.plot(damage, label=f"{player} Damage")
+        plt.plot(damage, label=f"{player} Damage", 
+                color=colors.get(player, 'green'),
+                marker=markers.get(player, 'x'),
+                markersize=4,
+                markevery=max(1, len(damage)//20))  # Show markers every ~20 points
     plt.title("Damage Dealt per Episode")
     plt.xlabel("Episode")
     plt.ylabel("Damage")
@@ -289,7 +319,8 @@ def create_training_plots(metrics, run_dir, epoch):
     # Plot epsilon decay
     plt.subplot(2, 2, 4)
     for player, epsilon in metrics["epsilon"].items():
-        plt.plot(epsilon, label=f"{player} Epsilon")
+        plt.plot(epsilon, label=f"{player} Epsilon",
+                color=colors.get(player, 'green'))
     plt.title("Exploration Rate (Epsilon) Decay")
     plt.xlabel("Episode")
     plt.ylabel("Epsilon")
