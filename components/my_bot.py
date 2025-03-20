@@ -466,17 +466,27 @@ class MyBot:
         except Exception as e:
             print(f"Error saving model: {e}")
 
-    def load(self, filepath):
+    def load(self, filepath, map_location=None):
         """Loads model weights from the specified file."""
         try:
-            checkpoint = torch.load(filepath, map_location=self.device)
+            # Use specified device or default to self.device
+            if map_location is None:
+                map_location = self.device
+                
+            checkpoint = torch.load(filepath, map_location=map_location)
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             if not self.reset_epsilon:
                 self.epsilon = checkpoint['epsilon']
             self.steps = checkpoint['steps']
-            self.model.to(self.device)
-            print(f"Model loaded successfully from {filepath}")
+            
+            # Ensure model is on the correct device
+            self.device = torch.device(map_location) if isinstance(map_location, str) else map_location
+            self.model = self.model.to(self.device)
+            self.target_model.load_state_dict(self.model.state_dict())
+            self.target_model = self.target_model.to(self.device)
+            
+            print(f"Model loaded successfully from {filepath} to {self.device}")
         except Exception as e:
             print(f"Error loading model: {e}")
             print("Starting with a fresh model")
