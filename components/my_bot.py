@@ -58,6 +58,7 @@ class MyBot:
         self.train_freq = 4  # Train less frequently for stability
         self.steps = 0
         self.use_double_dqn = True  # Enable Double DQN
+        self.reset_epsilon = True
         
         # Prioritized experience replay parameters
         self.alpha = 0.6  # Priority exponent
@@ -471,7 +472,8 @@ class MyBot:
             checkpoint = torch.load(filepath, map_location=self.device)
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            self.epsilon = checkpoint['epsilon']
+            if not self.reset_epsilon:
+                self.epsilon = checkpoint['epsilon']
             self.steps = checkpoint['steps']
             self.model.to(self.device)
             print(f"Model loaded successfully from {filepath}")
