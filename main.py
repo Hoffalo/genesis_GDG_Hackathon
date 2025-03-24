@@ -15,19 +15,6 @@ from Environment import Env
 from components.my_bot import MyBot
 from components.character import Character
 
-import argparse
-import copy
-import json
-import os
-import time
-from functools import partial
-from multiprocessing import Pool, Manager, cpu_count
-from datetime import datetime
-
-import numpy as np
-import pygame
-import torch
-import matplotlib.pyplot as plt
 
 # Import your environment, characters, and MyBot here
 # from my_environment_module import Env, Character
