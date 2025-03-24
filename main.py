@@ -9,6 +9,7 @@ import torch
 from multiprocessing import Pool, cpu_count, Manager, Lock
 from functools import partial
 import copy
+import time  # Add this import at the top of your file
 
 from Environment import Env
 from components.my_bot import MyBot
@@ -331,6 +332,9 @@ def main(num_environments=4, device=None, num_epochs=1000):
             # Calculate number of batches needed to reach num_epochs
             num_batches = (num_epochs + num_processes - 1) // num_processes
             
+            # Before the training loop
+            start_time = time.time()  # Record the start time
+            
             # Training loop with improved error handling
             for batch in range(num_batches):
                 # Calculate epoch range for this batch
@@ -503,6 +507,9 @@ def main(num_environments=4, device=None, num_epochs=1000):
         best_rewards = {"Ninja": float('-inf'), "Faze Jarvis": float('-inf')}
         
         try:
+            # Before the training loop
+            start_time = time.time()  # Record the start time
+            
             # Training loop for non-parallel mode
             for epoch in range(config["num_epochs"]):
                 print(f"Starting epoch {epoch + 1}/{config['num_epochs']}")
@@ -702,6 +709,16 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                             print(f"Still could not save model {idx}: {model_e2}")
                         except Exception as e:
                             print(f"Error saving metrics or models: {e}")
+                
+                    # After the training loop for each epoch
+                    total_steps += env.steps  # Sum steps from all environments
+                    elapsed_time = time.time() - start_time  # Calculate elapsed time
+                    steps_per_second = total_steps / elapsed_time if elapsed_time > 0 else 0  # Calculate steps per second
+
+                    print(f"Epoch {epoch + 1}/{config['num_epochs']} - Steps per second: {steps_per_second:.2f}")
+
+                    # Reset total_steps for the next epoch if needed
+                    total_steps = 0  # Reset for the next epoch if you want to track per epoch
                 
                 except Exception as e:
                     print(f"Error in epoch {epoch + 1}: {e}")
