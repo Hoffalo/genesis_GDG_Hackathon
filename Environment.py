@@ -215,7 +215,6 @@ class Env:
                         if len(player.previous_positions) > 10:
                             player.previous_positions.pop(0)
 
-                # add closest opponent info to player info
                 player_info = player.get_info()
                 player_info["shot_fired"] = actions.get("shoot", False)
                 player_info["closest_opponent"] = self.find_closest_opponent(player)
