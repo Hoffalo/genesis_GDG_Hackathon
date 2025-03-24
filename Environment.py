@@ -286,9 +286,9 @@ class Env:
                     closest_dist = dist
                     closest_pos = other.rect.center
 
-        # Return default position if no opponents found
+        # return default position if no opponents found
         if closest_pos is None:
-            return player.rect.center  # Return own position as fallback
+            return player.rect.center
 
         return closest_pos
 
@@ -306,7 +306,7 @@ class Env:
             print("Bot not found in the dictionary")
             return 0
 
-        # Extract variables from the bot's info
+        # extract variables from the bot's info
         location = bot_info.get("location", [0, 0])
         rotation = bot_info.get("rotation", 0)
         rays = bot_info.get("rays", [])
@@ -318,9 +318,9 @@ class Env:
         total_rotation = bot_info.get("total_rotation", 0)
         health = bot_info.get("health", 0)
 
-        # Calculate reward:
+        # calculate reward:
         reward = 0
-        # Add your reward calculation here
+        # add your reward calculation here
 
         return reward
 
