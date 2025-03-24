@@ -17,7 +17,7 @@ from components.character import Character
 
 screen = pygame.display.set_mode((800, 800))
 
-def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, shared_history):
+def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, shared_history, shared_epsilon):
     """Worker function to train a single episode"""
     try:
         # Determine current curriculum stage
@@ -73,6 +73,10 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                     except Exception as e:
                         print(f"Error loading model state for bot {idx}: {e}")
                         print("Starting with fresh model state")
+                
+                # Set epsilon from shared memory
+                with shared_epsilon.get_lock():
+                    bot.epsilon = shared_epsilon[idx]
                 bots.append(bot)
             except Exception as e:
                 print(f"Error creating bot {idx}: {e}")
@@ -133,6 +137,11 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                     if 'closest_opponent' not in next_info:
                         next_info['closest_opponent'] = env.find_closest_opponent(player)
                     bot.remember(reward, next_info, finished)
+                    
+                    # Update epsilon and store in shared memory
+                    bot.epsilon = max(0.01, bot.epsilon * bot.epsilon_decay)
+                    with shared_epsilon.get_lock():
+                        shared_epsilon[idx] = bot.epsilon
                     
                     episode_metrics["epsilon"][player.username] = bot.epsilon
                     episode_metrics["learning_rate"][player.username] = bot.learning_rate
@@ -247,6 +256,9 @@ def main(num_environments=4, device=None, num_epochs=1000):
     # Shared model states with proper synchronization
     shared_models = manager.list([None, None])
     
+    # Shared epsilon values for each bot
+    shared_epsilon = manager.list([1.0, 1.0])  # Initialize epsilon to 1.0 for both bots
+    
     # Shared training history
     shared_history = manager.dict({
         "total_steps": manager.Value('i', 0),
@@ -327,7 +339,8 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                           display_width=display_width,
                                           display_height=display_height,
                                           shared_models=shared_models,
-                                          shared_history=shared_history)
+                                          shared_history=shared_history,
+                                          shared_epsilon=shared_epsilon)
             
             # Calculate number of batches needed to reach num_epochs
             num_batches = (num_epochs + num_processes - 1) // num_processes
@@ -358,11 +371,15 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             # Get the actual epoch number
                             epoch = start_epoch + i
                             
-                            # Update shared history
-                            shared_history["total_steps"].value += steps
-                            shared_history["total_episodes"].value += 1
-                            shared_history["current_epoch"].value = epoch + 1
+                            # Update shared history with proper synchronization
+                            with shared_history["total_steps"].get_lock():
+                                shared_history["total_steps"].value += steps
+                            with shared_history["total_episodes"].get_lock():
+                                shared_history["total_episodes"].value += 1
+                            with shared_history["current_epoch"].get_lock():
+                                shared_history["current_epoch"].value = epoch + 1
                             
+                            # Update metrics with proper synchronization
                             metrics["episode_steps"].append(steps)
                             for player in ["Ninja", "Faze Jarvis"]:
                                 metrics["episode_rewards"][player].append(episode_metrics["rewards"][player])
@@ -372,9 +389,10 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                 metrics["epsilon"][player].append(episode_metrics["epsilon"][player])
                                 metrics["learning_rates"][player].append(episode_metrics["learning_rate"][player])
                                 
-                                # Update best rewards
-                                if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
-                                    shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
+                                # Update best rewards with proper synchronization
+                                with shared_history["best_rewards"][player].get_lock():
+                                    if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
+                                        shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
                                 
                                 # Calculate average rewards
                                 avg_reward = sum(metrics["episode_rewards"][player][-10:]) / min(10, len(metrics["episode_rewards"][player]))
@@ -407,12 +425,14 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                 if isinstance(v, dict):
                                     save_metrics[k] = {}
                                     for player, values in v.items():
-                                        if hasattr(values, '__iter__'):
-                                            save_metrics[k][player] = list(values)
+                                        if isinstance(values, (list, tuple)):
+                                            # Convert ListProxy to regular list
+                                            save_metrics[k][player] = [x for x in values]
                                         else:
                                             save_metrics[k][player] = values
-                                elif hasattr(v, '__iter__'):
-                                    save_metrics[k] = list(v)
+                                elif isinstance(v, (list, tuple)):
+                                    # Convert ListProxy to regular list
+                                    save_metrics[k] = [x for x in v]
                                 else:
                                     save_metrics[k] = v
                             
@@ -427,11 +447,15 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                 }
                             }
                             
-                            with open(f"{run_dir}/metrics.json", "w") as f:
+                            # Save metrics with proper file locking
+                            metrics_file = f"{run_dir}/metrics.json"
+                            with open(metrics_file, "w") as f:
                                 json.dump(save_metrics, f, indent=4)
+                            
+                            # Create and save plots
                             create_training_plots(save_metrics, run_dir, current_epoch)
                             
-                            # Save model checkpoints
+                            # Save model checkpoints with proper synchronization
                             for idx, model_state in enumerate(shared_models):
                                 if model_state is not None:
                                     try:
@@ -454,9 +478,11 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                             print(f"Still could not save model {idx}: {model_e2}")
                                 
                             # Update last save timestamp
-                            shared_history["last_save"].value = current_epoch
+                            with shared_history["last_save"].get_lock():
+                                shared_history["last_save"].value = current_epoch
                         except Exception as e:
                             print(f"Error saving metrics or models: {e}")
+                            print(f"Error details: {str(e)}")  # Add more detailed error information
                     
                 except Exception as e:
                     print(f"Error in batch {batch + 1}: {e}")
