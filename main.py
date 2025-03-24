@@ -48,7 +48,7 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
         
         # Create bots with shared models
         bots = []
-        for idx in range(2):
+        for idx, player in enumerate(players):
             try:
                 # Get device from config
                 device = config.get("device", "cpu")
@@ -75,8 +75,8 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                         print("Starting with fresh model state")
                 
                 # Set epsilon from shared memory
-                with shared_epsilon.get_lock():
-                    bot.epsilon = shared_epsilon[idx]
+                with shared_epsilon[player.username].get_lock():
+                    bot.epsilon = shared_epsilon[player.username].value
                 bots.append(bot)
             except Exception as e:
                 print(f"Error creating bot {idx}: {e}")
@@ -140,8 +140,8 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                     
                     # Update epsilon and store in shared memory
                     bot.epsilon = max(0.01, bot.epsilon * bot.epsilon_decay)
-                    with shared_epsilon.get_lock():
-                        shared_epsilon[idx] = bot.epsilon
+                    with shared_epsilon[player.username].get_lock():
+                        shared_epsilon[player.username].value = bot.epsilon
                     
                     episode_metrics["epsilon"][player.username] = bot.epsilon
                     episode_metrics["learning_rate"][player.username] = bot.learning_rate
@@ -256,8 +256,11 @@ def main(num_environments=4, device=None, num_epochs=1000):
     # Shared model states with proper synchronization
     shared_models = manager.list([None, None])
     
-    # Shared epsilon values for each bot
-    shared_epsilon = manager.list([1.0, 1.0])  # Initialize epsilon to 1.0 for both bots
+    # Shared epsilon values for each bot with proper synchronization
+    shared_epsilon = manager.dict({
+        "Ninja": manager.Value('f', 1.0),
+        "Faze Jarvis": manager.Value('f', 1.0)
+    })
     
     # Shared training history
     shared_history = manager.dict({
