@@ -418,20 +418,20 @@ def main(num_environments=4, device=None, num_epochs=1000):
                         try:
                             # Convert shared memory metrics to regular dict for saving
                             save_metrics = {}
+                            
+                            # Helper function to convert ListProxy to regular list
+                            def convert_to_serializable(obj):
+                                if isinstance(obj, (list, tuple)):
+                                    return [convert_to_serializable(x) for x in obj]
+                                elif isinstance(obj, dict):
+                                    return {k: convert_to_serializable(v) for k, v in obj.items()}
+                                elif hasattr(obj, 'value'):  # Handle Value objects
+                                    return obj.value
+                                return obj
+                            
+                            # Convert all metrics to serializable format
                             for k, v in metrics.items():
-                                if isinstance(v, dict):
-                                    save_metrics[k] = {}
-                                    for player, values in v.items():
-                                        if isinstance(values, (list, tuple)):
-                                            # Convert ListProxy to regular list
-                                            save_metrics[k][player] = [x for x in values]
-                                        else:
-                                            save_metrics[k][player] = values
-                                elif isinstance(v, (list, tuple)):
-                                    # Convert ListProxy to regular list
-                                    save_metrics[k] = [x for x in v]
-                                else:
-                                    save_metrics[k] = v
+                                save_metrics[k] = convert_to_serializable(v)
                             
                             # Add shared history to saved metrics
                             save_metrics["shared_history"] = {
@@ -456,21 +456,46 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             for idx, model_state in enumerate(shared_models):
                                 if model_state is not None:
                                     try:
+                                        # Ensure the model state is on CPU before saving
+                                        if isinstance(model_state, dict):
+                                            # Convert all tensors in the state dict to CPU
+                                            cpu_state = {k: v.cpu() if torch.is_tensor(v) else v 
+                                                       for k, v in model_state.items()}
+                                        else:
+                                            cpu_state = model_state.cpu() if torch.is_tensor(model_state) else model_state
+                                        
+                                        # Create directories if they don't exist
+                                        os.makedirs(f"{run_dir}/models", exist_ok=True)
+                                        
+                                        # Save checkpoint
                                         save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}.pth"
-                                        torch.save(model_state, save_path)
+                                        torch.save(cpu_state, save_path)
                                         print(f"Successfully saved model {idx} checkpoint at epoch {current_epoch}")
                                         
                                         # Also save to standard location for easy loading
-                                        torch.save(model_state, f"bot_model_{idx}.pth")
+                                        torch.save(cpu_state, f"bot_model_{idx}.pth")
                                         print(f"Successfully saved model {idx} to standard location")
+                                        
+                                        # Save a backup copy
+                                        backup_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}_backup.pth"
+                                        torch.save(cpu_state, backup_path)
+                                        print(f"Successfully saved backup model {idx} at epoch {current_epoch}")
+                                        
                                     except Exception as model_e:
                                         print(f"Error saving model {idx} at epoch {current_epoch}: {model_e}")
-                                        # Ensure directory exists
-                                        os.makedirs(f"{run_dir}/models", exist_ok=True)
+                                        print(f"Model state type: {type(model_state)}")
+                                        if isinstance(model_state, dict):
+                                            print(f"Model state keys: {model_state.keys()}")
                                         try:
-                                            torch.save(model_state, save_path)
-                                            torch.save(model_state, f"bot_model_{idx}.pth")
-                                            print(f"Successfully saved model {idx} after creating directory")
+                                            # Try alternative saving method
+                                            if isinstance(model_state, dict):
+                                                # Save each tensor separately
+                                                save_dir = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}_split"
+                                                os.makedirs(save_dir, exist_ok=True)
+                                                for k, v in model_state.items():
+                                                    if torch.is_tensor(v):
+                                                        torch.save(v.cpu(), f"{save_dir}/{k}.pth")
+                                                print(f"Successfully saved split model {idx} at epoch {current_epoch}")
                                         except Exception as model_e2:
                                             print(f"Still could not save model {idx}: {model_e2}")
                                 
