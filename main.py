@@ -75,8 +75,7 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                         print("Starting with fresh model state")
                 
                 # Set epsilon from shared memory
-                with shared_epsilon[player.username].get_lock():
-                    bot.epsilon = shared_epsilon[player.username].value
+                bot.epsilon = shared_epsilon[player.username].value
                 bots.append(bot)
             except Exception as e:
                 print(f"Error creating bot {idx}: {e}")
@@ -140,8 +139,7 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                     
                     # Update epsilon and store in shared memory
                     bot.epsilon = max(0.01, bot.epsilon * bot.epsilon_decay)
-                    with shared_epsilon[player.username].get_lock():
-                        shared_epsilon[player.username].value = bot.epsilon
+                    shared_epsilon[player.username].value = bot.epsilon
                     
                     episode_metrics["epsilon"][player.username] = bot.epsilon
                     episode_metrics["learning_rate"][player.username] = bot.learning_rate
@@ -374,15 +372,12 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             # Get the actual epoch number
                             epoch = start_epoch + i
                             
-                            # Update shared history with proper synchronization
-                            with shared_history["total_steps"].get_lock():
-                                shared_history["total_steps"].value += steps
-                            with shared_history["total_episodes"].get_lock():
-                                shared_history["total_episodes"].value += 1
-                            with shared_history["current_epoch"].get_lock():
-                                shared_history["current_epoch"].value = epoch + 1
+                            # Update shared history
+                            shared_history["total_steps"].value += steps
+                            shared_history["total_episodes"].value += 1
+                            shared_history["current_epoch"].value = epoch + 1
                             
-                            # Update metrics with proper synchronization
+                            # Update metrics
                             metrics["episode_steps"].append(steps)
                             for player in ["Ninja", "Faze Jarvis"]:
                                 metrics["episode_rewards"][player].append(episode_metrics["rewards"][player])
@@ -392,10 +387,9 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                 metrics["epsilon"][player].append(episode_metrics["epsilon"][player])
                                 metrics["learning_rates"][player].append(episode_metrics["learning_rate"][player])
                                 
-                                # Update best rewards with proper synchronization
-                                with shared_history["best_rewards"][player].get_lock():
-                                    if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
-                                        shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
+                                # Update best rewards
+                                if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
+                                    shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
                                 
                                 # Calculate average rewards
                                 avg_reward = sum(metrics["episode_rewards"][player][-10:]) / min(10, len(metrics["episode_rewards"][player]))
