@@ -50,7 +50,7 @@ class MyBot:
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_min = 0.05  # Increased minimum exploration from 0.01 to allow more exploration
-        self.epsilon_decay = 0.999999  # Much slower decay for more exploration throughout training
+        self.epsilon_decay = 1 #0.999999  # Much slower decay for more exploration throughout training
         self.learning_rate = 0.0001  # Reduced learning rate for stability
         self.batch_size = 64  # Reduced batch size for more stable learning
         self.min_memory_size = 1000  # Reduced minimum memory size for faster start

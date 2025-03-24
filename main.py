@@ -253,7 +253,7 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
             "learning_rate": 0.0001,
             "batch_size": 64,
             "gamma": 0.99,
-            "epsilon_decay": 0.9999,
+            "epsilon_decay": 0.99996,
         }
     }
 

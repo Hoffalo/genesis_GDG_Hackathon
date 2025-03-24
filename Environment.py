@@ -291,18 +291,18 @@ class Env:
         """Find the position of the closest opponent for a given player"""
         closest_dist = float('inf')
         closest_pos = None
-        
+
         for other in self.players:
             if other != player and other.alive:
                 dist = math.dist(player.rect.center, other.rect.center)
                 if dist < closest_dist:
                     closest_dist = dist
                     closest_pos = other.rect.center
-                    
+
         # Return default position if no opponents found
         if closest_pos is None:
             return player.rect.center  # Return own position as fallback
-            
+
         return closest_pos
 
     """TO MODIFY"""
@@ -344,6 +344,7 @@ class Env:
         2. Accurate shooting and damage dealing
         3. Strategic movement and positioning
         4. Eliminating opponents
+        5. Exploration of new areas
         """
         players_info = info_dictionary.get("players_info", {})
         bot_info = players_info.get(bot_username)
@@ -368,12 +369,30 @@ class Env:
             self.last_kills[bot_username] = kills
         if bot_username not in self.last_health:
             self.last_health[bot_username] = health
+        if bot_username not in self.visited_areas:
+            self.visited_areas[bot_username] = set()
 
         reward = 0
 
-        # 1. Movement reward - encourage exploration but not excessive movement
+        # 1. Movement reward - encourage exploration of new areas
         distance_moved = math.dist(current_position, self.last_positions[bot_username])
-        reward += min(distance_moved * 0.05, 0.5)  # Cap movement reward
+
+        # Discretize position to a grid cell (using a grid size of 50x50)
+        grid_size = 50
+        grid_x = int(current_position[0] / grid_size)
+        grid_y = int(current_position[1] / grid_size)
+        grid_pos = (grid_x, grid_y)
+
+        # Check if this grid cell has been visited before
+        if grid_pos not in self.visited_areas[bot_username]:
+            # Reward for discovering a new area
+            self.visited_areas[bot_username].add(grid_pos)
+            # Scale reward based on number of areas discovered (diminishing returns)
+            discovery_reward = min(1.0, 10.0 / len(self.visited_areas[bot_username]))
+            reward += discovery_reward
+        else:
+            # Small reward for movement even if not discovering new areas
+            reward += min(distance_moved * 0.01, 0.1)  # Reduced reward for revisiting
 
         # 2. Damage reward - encourage accurate shooting
         delta_damage = damage_dealt - self.last_damage[bot_username]
