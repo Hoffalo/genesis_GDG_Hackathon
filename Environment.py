@@ -16,10 +16,10 @@ class Env:
         self.training_mode = training
 
         # ONLY FOR DISPLAY
-        # Create display window with desired display dimensions
+        # create display window with desired display dimensions
         self.display_width = display_width
         self.display_height = display_height
-        # Only create a window if not in training mode
+        # only create a window if not in training mode
         if not self.training_mode:
             self.screen = pygame.display.set_mode((display_width, display_height))
         else:
@@ -29,7 +29,7 @@ class Env:
             self.screen = pygame.Surface((display_width, display_height))
 
         # REAL WORLD DIMENSIONS
-        # Create an off-screen surface for the game world
+        # create an off-screen surface for the game world
         self.world_width = world_width
         self.world_height = world_height
         self.world_surface = pygame.Surface((world_width, world_height))
@@ -48,7 +48,7 @@ class Env:
         self.min_obstacle_size = (50, 50)
         self.max_obstacle_size = (100, 100)
 
-        # Frame skip for training acceleration
+        # frame skip for training acceleration
         self.frame_skip = frame_skip if training else 1
 
         # INIT SOME VARIABLES
@@ -108,10 +108,8 @@ class Env:
 
         # TODO: add variables for parameters
         if self.use_advanced_UI:
-            # Use the obstacles from game_UI
             self.obstacles = self.advanced_UI.obstacles
         else:
-            # Create new obstacles only if needed
             if randomize_objects or self.OG_obstacles is None:
                 self.OG_obstacles = spawn_objects(
                     (0, 0, self.world_width, self.world_height),
@@ -165,7 +163,7 @@ class Env:
                     player_info['closest_opponent'] = self.find_closest_opponent(player)
                     player_actions[player.username] = player.related_bot.act(player_info)
 
-        # Process multiple frames if frame skipping is enabled
+        # process multiple frames if frame skipping is enabled
         for _ in range(skip_count):
             if game_over:
                 break
@@ -176,14 +174,13 @@ class Env:
             alive_players = []
 
             for player in self.players:
-                # Update the tick counter for each player
                 player.update_tick()
 
-                # Use stored actions if in training mode with frame skipping
+                # use stored actions if in training mode with frame skipping
                 if self.training_mode and skip_count > 1:
                     actions = player_actions.get(player.username, {})
                 else:
-                    # Update info with closest opponent before getting action
+                    # update info with closest opponent before getting action
                     player_info = player.get_info()
                     player_info['closest_opponent'] = self.find_closest_opponent(player)
                     actions = player.related_bot.act(player_info)
@@ -192,7 +189,7 @@ class Env:
                     alive_players.append(player)
                     player.reload()
 
-                    # Skip drawing in training mode for better performance
+                    # skip drawing in training mode for better performance
                     if not self.training_mode:
                         player.draw(self.world_surface)
 
@@ -212,14 +209,14 @@ class Env:
                         player.shoot()
 
                     if not self.training_mode:
-                        # Store position for trail
+                        # store position for trail
                         if not hasattr(player, 'previous_positions'):
                             player.previous_positions = []
                         player.previous_positions.append(player.rect.center)
                         if len(player.previous_positions) > 10:
                             player.previous_positions.pop(0)
 
-                # Add closest opponent info to player info
+                # add closest opponent info to player info
                 player_info = player.get_info()
                 player_info["shot_fired"] = actions.get("shoot", False)
                 player_info["closest_opponent"] = self.find_closest_opponent(player)
