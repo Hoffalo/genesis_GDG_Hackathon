@@ -50,7 +50,7 @@ class MyBot:
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_min = 0.05  # Increased minimum exploration from 0.01 to allow more exploration
-        self.epsilon_decay = 0.9999  # Much slower decay for more exploration throughout training
+        self.epsilon_decay = 0.999999  # Much slower decay for more exploration throughout training
         self.learning_rate = 0.0001  # Reduced learning rate for stability
         self.batch_size = 64  # Reduced batch size for more stable learning
         self.min_memory_size = 1000  # Reduced minimum memory size for faster start
@@ -473,9 +473,26 @@ class MyBot:
             if map_location is None:
                 map_location = self.device
 
-            checkpoint = torch.load(filepath, map_location=map_location)
+            # Always load checkpoint to CPU first to avoid MPS-specific issues
+            checkpoint = torch.load(filepath, map_location='cpu')
+
+            # Load model state dict
             self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+            # Handle optimizer state dict carefully
+            # Some optimizer states have CPU-specific features that aren't compatible with MPS
+            try:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                # Move optimizer state to the correct device if needed
+                if map_location != 'cpu':
+                    for state in self.optimizer.state.values():
+                        for k, v in state.items():
+                            if isinstance(v, torch.Tensor):
+                                state[k] = v.to(map_location)
+            except Exception as e:
+                print(f"Warning: Could not load optimizer state: {e}")
+                print("Continuing with fresh optimizer but keeping model weights")
+
             if not self.reset_epsilon:
                 self.epsilon = checkpoint['epsilon']
             self.steps = checkpoint['steps']

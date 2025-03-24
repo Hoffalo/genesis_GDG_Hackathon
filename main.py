@@ -17,7 +17,7 @@ from components.character import Character
 
 screen = pygame.display.set_mode((800, 800))
 
-def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, shared_history, shared_epsilon):
+def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, shared_history, shared_epsilon, training=True):
     """Worker function to train a single episode"""
     try:
         # Log epoch and process ID to verify parallel environments
@@ -32,7 +32,7 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
         current_obstacles = curriculum_stages[current_stage]["n_obstacles"]
 
         # Create environment for this episode
-        env = Env(training=True,
+        env = Env(training=training,
                   use_game_ui=False,
                   world_width=world_bounds[2] - world_bounds[0],
                   world_height=world_bounds[3] - world_bounds[1],
@@ -138,11 +138,13 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                     next_info = player.get_info()
                     if 'closest_opponent' not in next_info:
                         next_info['closest_opponent'] = env.find_closest_opponent(player)
-                    bot.remember(reward, next_info, finished)
+                    if training:
+                        bot.remember(reward, next_info, finished)
 
                     # Update epsilon and store in shared memory
-                    bot.epsilon = max(0.01, bot.epsilon * bot.epsilon_decay)
-                    shared_epsilon[player.username].value = bot.epsilon
+                    if training:
+                        bot.epsilon = max(0.01, bot.epsilon * bot.epsilon_decay)
+                        shared_epsilon[player.username].value = bot.epsilon
 
                     episode_metrics["epsilon"][player.username] = bot.epsilon
                     episode_metrics["learning_rate"][player.username] = bot.learning_rate
@@ -170,7 +172,7 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
             "learning_rate": {"Ninja": 0, "Faze Jarvis": 0}
         }, 0, [None, None]
 
-def main(num_environments=4, device=None, num_epochs=1000):
+def main(num_environments=4, device=None, num_epochs=1000, training=True):
     # Environment parameters
     world_width = 1280
     world_height = 1280
@@ -180,6 +182,10 @@ def main(num_environments=4, device=None, num_epochs=1000):
 
     load_back = True
     state_size = 38
+
+    # If not training, force single environment
+    if not training:
+        num_environments = 1
 
     # CUDA availability check
     cuda_available = torch.cuda.is_available()
@@ -233,7 +239,7 @@ def main(num_environments=4, device=None, num_epochs=1000):
         }, f, indent=4)
 
     # Create initial environment to get world bounds
-    env = Env(training=True,
+    env = Env(training=training,
               use_game_ui=False,
               world_width=world_width,
               world_height=world_height,
@@ -302,22 +308,48 @@ def main(num_environments=4, device=None, num_epochs=1000):
                         # Try to load model with the specified device
                         temp_bot.load(save_path, map_location=device)
 
-                        # Store the model state in shared memory or local storage
-                        model_state = copy.deepcopy(temp_bot.model.state_dict())
-                        if num_environments > 1:
-                            shared_models[idx] = model_state
-                        local_models[idx] = model_state
+                        try:
+                            # Store the model state in shared memory or local storage
+                            # First detach tensors from device to avoid MPS-specific issues with deepcopy
+                            model_state_dict = temp_bot.model.state_dict()
+                            print(f"Successfully obtained model_state_dict with keys: {list(model_state_dict.keys())}")
 
-                        print(f"Loaded model {idx} from {save_path} to {device}")
+                            cpu_state_dict = {k: v.detach().cpu() for k, v in model_state_dict.items()}
+                            print(f"Successfully detached tensors to CPU")
+
+                            model_state = copy.deepcopy(cpu_state_dict)
+                            print(f"Successfully created deep copy of model state")
+
+                            if num_environments > 1:
+                                shared_models[idx] = model_state
+                            local_models[idx] = model_state
+
+                            print(f"Loaded model {idx} from {save_path} to {device}")
+                        except Exception as inner_e:
+                            print(f"Error processing model after loading: {inner_e}")
+                            raise inner_e
                     except Exception as e:
                         print(f"Error loading model to {device}: {e}")
                         print(f"Trying to load to CPU instead")
                         temp_bot.load(save_path, map_location="cpu")
-                        model_state = copy.deepcopy(temp_bot.model.state_dict())
-                        if num_environments > 1:
-                            shared_models[idx] = model_state
-                        local_models[idx] = model_state
-                        print(f"Loaded model {idx} from {save_path} to CPU")
+
+                        try:
+                            # Use the same approach for CPU fallback
+                            model_state_dict = temp_bot.model.state_dict()
+                            print(f"Successfully obtained model_state_dict with keys: {list(model_state_dict.keys())}")
+
+                            # No need to detach/move to CPU since we're already on CPU
+                            model_state = copy.deepcopy(model_state_dict)
+                            print(f"Successfully created deep copy of model state")
+
+                            if num_environments > 1:
+                                shared_models[idx] = model_state
+                            local_models[idx] = model_state
+                            print(f"Loaded model {idx} from {save_path} to CPU")
+                        except Exception as cpu_e:
+                            print(f"Error processing model after loading to CPU: {cpu_e}")
+                            # Continue with a fresh model instead of raising the exception
+                            print(f"Starting with a fresh model for bot {idx}")
                 else:
                     print(f"No saved model found for bot {idx}, starting fresh")
         except Exception as e:
@@ -344,7 +376,8 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                           display_height=display_height,
                                           shared_models=shared_models,
                                           shared_history=shared_history,
-                                          shared_epsilon=shared_epsilon)
+                                          shared_epsilon=shared_epsilon,
+                                          training=training)
 
             # Calculate number of batches needed to reach num_epochs
             num_batches = (num_epochs + num_processes - 1) // num_processes
@@ -606,7 +639,7 @@ def main(num_environments=4, device=None, num_epochs=1000):
                     current_obstacles = curriculum_stages[current_stage]["n_obstacles"]
 
                     # Create environment for this episode
-                    env = Env(training=True,
+                    env = Env(training=training,
                               use_game_ui=False,
                               world_width=world_bounds[2] - world_bounds[0],
                               world_height=world_bounds[3] - world_bounds[1],
@@ -709,7 +742,8 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                 next_info = player.get_info()
                                 if 'closest_opponent' not in next_info:
                                     next_info['closest_opponent'] = env.find_closest_opponent(player)
-                                bot.remember(reward, next_info, finished)
+                                if training:
+                                    bot.remember(reward, next_info, finished)
 
                                 episode_metrics["epsilon"][player.username] = bot.epsilon
                                 episode_metrics["learning_rate"][player.username] = bot.learning_rate
@@ -1042,6 +1076,10 @@ if __name__ == "__main__":
                         help='Device to use (cuda, cpu, mps). If not specified, best available device will be used.')
     parser.add_argument('--epochs', type=int, default=1000,
                         help='Number of training epochs to run')
+    parser.add_argument('--training', action='store_true', default=True,
+                        help='Enable training mode')
+    parser.add_argument('--no-training', dest='training', action='store_false', default=False,
+                        help='Disable training mode (only use one environment and do not train)')
     args = parser.parse_args()
 
     # Set up screen for pygame
@@ -1051,7 +1089,8 @@ if __name__ == "__main__":
     main_kwargs = {
         'num_environments': args.num_environments,
         'device': args.device,
-        'num_epochs': args.epochs
+        'num_epochs': args.epochs,
+        'training': args.training
     }
 
     # Run main with arguments
