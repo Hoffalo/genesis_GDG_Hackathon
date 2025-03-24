@@ -431,7 +431,11 @@ def main(num_environments=4, device=None, num_epochs=1000):
                             
                             # Convert all metrics to serializable format
                             for k, v in metrics.items():
-                                save_metrics[k] = convert_to_serializable(v)
+                                try:
+                                    save_metrics[k] = convert_to_serializable(v)
+                                except Exception as e:
+                                    print(f"Error converting metric {k}: {e}")
+                                    save_metrics[k] = []  # Provide empty default
                             
                             # Add shared history to saved metrics
                             save_metrics["shared_history"] = {
@@ -444,13 +448,29 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                 }
                             }
                             
-                            # Save metrics with proper file locking
+                            # Save metrics with proper file locking and error handling
                             metrics_file = f"{run_dir}/metrics.json"
-                            with open(metrics_file, "w") as f:
-                                json.dump(save_metrics, f, indent=4)
+                            try:
+                                # First save to a temporary file
+                                temp_file = f"{metrics_file}.tmp"
+                                with open(temp_file, "w") as f:
+                                    json.dump(save_metrics, f, indent=4)
+                                
+                                # If successful, rename to the actual file
+                                os.replace(temp_file, metrics_file)
+                                print(f"Successfully saved metrics to {metrics_file}")
+                            except Exception as e:
+                                print(f"Error saving metrics file: {e}")
+                                if os.path.exists(temp_file):
+                                    os.remove(temp_file)
+                                raise
                             
-                            # Create and save plots
-                            create_training_plots(save_metrics, run_dir, current_epoch)
+                            # Create and save plots with error handling
+                            try:
+                                create_training_plots(save_metrics, run_dir, current_epoch)
+                            except Exception as e:
+                                print(f"Error creating plots: {e}")
+                                # Continue with model saving even if plots fail
                             
                             # Save model checkpoints with proper synchronization
                             for idx, model_state in enumerate(shared_models):
@@ -467,44 +487,51 @@ def main(num_environments=4, device=None, num_epochs=1000):
                                         # Create directories if they don't exist
                                         os.makedirs(f"{run_dir}/models", exist_ok=True)
                                         
-                                        # Save checkpoint
+                                        # Save checkpoint with error handling
                                         save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}.pth"
-                                        torch.save(cpu_state, save_path)
-                                        print(f"Successfully saved model {idx} checkpoint at epoch {current_epoch}")
+                                        temp_path = f"{save_path}.tmp"
                                         
-                                        # Also save to standard location for easy loading
-                                        torch.save(cpu_state, f"bot_model_{idx}.pth")
-                                        print(f"Successfully saved model {idx} to standard location")
-                                        
-                                        # Save a backup copy
-                                        backup_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}_backup.pth"
-                                        torch.save(cpu_state, backup_path)
-                                        print(f"Successfully saved backup model {idx} at epoch {current_epoch}")
-                                        
+                                        try:
+                                            # Save to temporary file first
+                                            torch.save(cpu_state, temp_path)
+                                            # If successful, rename to actual file
+                                            os.replace(temp_path, save_path)
+                                            print(f"Successfully saved model {idx} checkpoint at epoch {current_epoch}")
+                                            
+                                            # Also save to standard location
+                                            torch.save(cpu_state, f"bot_model_{idx}.pth")
+                                            print(f"Successfully saved model {idx} to standard location")
+                                            
+                                            # Save backup
+                                            backup_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}_backup.pth"
+                                            torch.save(cpu_state, backup_path)
+                                            print(f"Successfully saved backup model {idx} at epoch {current_epoch}")
+                                            
+                                        except Exception as model_e:
+                                            print(f"Error saving model {idx} at epoch {current_epoch}: {model_e}")
+                                            if os.path.exists(temp_path):
+                                                os.remove(temp_path)
+                                            raise
+                                            
                                     except Exception as model_e:
-                                        print(f"Error saving model {idx} at epoch {current_epoch}: {model_e}")
+                                        print(f"Critical error saving model {idx}: {model_e}")
                                         print(f"Model state type: {type(model_state)}")
                                         if isinstance(model_state, dict):
                                             print(f"Model state keys: {model_state.keys()}")
-                                        try:
-                                            # Try alternative saving method
-                                            if isinstance(model_state, dict):
-                                                # Save each tensor separately
-                                                save_dir = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}_split"
-                                                os.makedirs(save_dir, exist_ok=True)
-                                                for k, v in model_state.items():
-                                                    if torch.is_tensor(v):
-                                                        torch.save(v.cpu(), f"{save_dir}/{k}.pth")
-                                                print(f"Successfully saved split model {idx} at epoch {current_epoch}")
-                                        except Exception as model_e2:
-                                            print(f"Still could not save model {idx}: {model_e2}")
+                                        continue
                                 
                             # Update last save timestamp
-                            with shared_history["last_save"].get_lock():
-                                shared_history["last_save"].value = current_epoch
+                            shared_history["last_save"].value = current_epoch
+                            
                         except Exception as e:
-                            print(f"Error saving metrics or models: {e}")
-                            print(f"Error details: {str(e)}")  # Add more detailed error information
+                            print(f"Error in save operation: {e}")
+                            print(f"Error details: {str(e)}")
+                            # Try to save at least the metrics
+                            try:
+                                with open(f"{run_dir}/metrics.json", "w") as f:
+                                    json.dump(save_metrics, f, indent=4)
+                            except Exception as metrics_e:
+                                print(f"Failed to save metrics as fallback: {metrics_e}")
                     
                 except Exception as e:
                     print(f"Error in batch {batch + 1}: {e}")
