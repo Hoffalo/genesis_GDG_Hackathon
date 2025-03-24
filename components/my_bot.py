@@ -452,6 +452,44 @@ class MyBot:
             "steps": self.steps,
         }
 
+    def save_to_dict(self):
+        """Return a checkpoint dictionary of the entire training state."""
+        return {
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'epsilon': self.epsilon,
+            'steps': self.steps,
+            'hyperparameters': self.get_hyperparameters(),
+        }
+
+    def load_from_dict(self, checkpoint_dict, map_location=None):
+        """Load everything from an in-memory checkpoint dictionary."""
+        if map_location is None:
+            map_location = self.device
+
+        # First ensure everything is on CPU, then move to final device if needed
+        self.model.load_state_dict(checkpoint_dict['model_state_dict'])
+        try:
+            self.optimizer.load_state_dict(checkpoint_dict['optimizer_state_dict'])
+            if map_location != 'cpu':
+                for state in self.optimizer.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.to(map_location)
+        except Exception as e:
+            print(f"Warning: Could not load optimizer state: {e}")
+            print("Continuing with fresh optimizer but keeping model weights")
+
+        if not self.reset_epsilon:
+            self.epsilon = checkpoint_dict.get('epsilon', self.epsilon)
+        self.steps = checkpoint_dict.get('steps', 0)
+
+        # Move model and target model to final device
+        self.device = torch.device(map_location) if isinstance(map_location, str) else map_location
+        self.model = self.model.to(self.device)
+        self.target_model.load_state_dict(self.model.state_dict())
+        self.target_model = self.target_model.to(self.device)
+
     def save(self, filepath):
         """Saves the model weights and training state."""
         try:
@@ -475,6 +513,7 @@ class MyBot:
 
             # Always load checkpoint to CPU first to avoid MPS-specific issues
             checkpoint = torch.load(filepath, map_location='cpu')
+            print("keys", checkpoint.keys())
 
             # Load model state dict
             self.model.load_state_dict(checkpoint['model_state_dict'])

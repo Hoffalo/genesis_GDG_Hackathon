@@ -15,7 +15,23 @@ from Environment import Env
 from components.my_bot import MyBot
 from components.character import Character
 
-screen = pygame.display.set_mode((800, 800))
+import argparse
+import copy
+import json
+import os
+import time
+from functools import partial
+from multiprocessing import Pool, Manager, cpu_count
+from datetime import datetime
+
+import numpy as np
+import pygame
+import torch
+import matplotlib.pyplot as plt
+
+# Import your environment, characters, and MyBot here
+# from my_environment_module import Env, Character
+# from my_bot import MyBot  # You will add your MyBot class code in a separate file
 
 def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, shared_history, shared_epsilon, training=True):
     """Worker function to train a single episode"""
@@ -23,30 +39,32 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
         # Log epoch and process ID to verify parallel environments
         import os
         print(f"Starting epoch {epoch} in process {os.getpid()}")
+
         # Determine current curriculum stage
         current_stage = 0
         for i, stage in enumerate(curriculum_stages):
             if epoch >= sum(s["duration"] for s in curriculum_stages[:i]):
                 current_stage = i
-
         current_obstacles = curriculum_stages[current_stage]["n_obstacles"]
 
         # Create environment for this episode
-        env = Env(training=training,
-                  use_game_ui=False,
-                  world_width=world_bounds[2] - world_bounds[0],
-                  world_height=world_bounds[3] - world_bounds[1],
-                  display_width=display_width,
-                  display_height=display_height,
-                  n_of_obstacles=current_obstacles,
-                  frame_skip=config["frame_skip"])
+        env = Env(
+            training=training,
+            use_game_ui=False,
+            world_width=world_bounds[2] - world_bounds[0],
+            world_height=world_bounds[3] - world_bounds[1],
+            display_width=display_width,
+            display_height=display_height,
+            n_of_obstacles=current_obstacles,
+            frame_skip=config["frame_skip"],
+        )
 
         # Setup players
         players = [
             Character((world_bounds[2] - 100, world_bounds[3] - 100),
                       env.world_surface, boundaries=world_bounds, username="Ninja"),
-            Character((world_bounds[0] + 10, world_bounds[1]+10),
-                      env.world_surface, boundaries=world_bounds, username="Faze Jarvis")
+            Character((world_bounds[0] + 10, world_bounds[1] + 10),
+                      env.world_surface, boundaries=world_bounds, username="Faze Jarvis"),
         ]
 
         # Create bots with shared models
@@ -71,8 +89,8 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                 # Load shared model state with error handling
                 if shared_models[idx] is not None:
                     try:
-                        bot.model.load_state_dict(shared_models[idx])
-                        bot.target_model.load_state_dict(shared_models[idx])
+                        # We expect a checkpoint dictionary from the parallel manager
+                        bot.load_from_dict(shared_models[idx], map_location=device)
                     except Exception as e:
                         print(f"Error loading model state for bot {idx}: {e}")
                         print("Starting with fresh model state")
@@ -102,7 +120,7 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
             "damage_dealt": {player.username: 0 for player in players},
             "survival_time": {player.username: 0 for player in players},
             "epsilon": {player.username: 0 for player in players},
-            "learning_rate": {player.username: 0 for player in players}
+            "learning_rate": {player.username: 0 for player in players},
         }
 
         while True:
@@ -155,10 +173,22 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
             if finished:
                 break
 
-        # Return model states and metrics
-        # Move model states to CPU before copying to ensure they can be shared between processes
-        model_states = [copy.deepcopy(bot.model.cpu().state_dict()) for bot in bots]
-        return episode_metrics, env.steps, model_states
+        # Return full checkpoint dictionaries (including optimizer, etc.)
+        model_checkpoints = []
+        for bot in bots:
+            # Move bot’s model/optimizer states to CPU so the dictionary is consistent
+            bot.model.cpu()
+            # Copy the optimizer state to CPU as well
+            bot.optimizer.state = {
+                k: {
+                    subk: v.cpu() for subk, v in val.items() if isinstance(v, torch.Tensor)
+                } if isinstance(val, dict) else val
+                for k, val in bot.optimizer.state.items()
+            }
+            checkpoint_dict = bot.save_to_dict()
+            model_checkpoints.append(checkpoint_dict)
+
+        return episode_metrics, env.steps, model_checkpoints
 
     except Exception as e:
         print(f"Critical error in train_episode: {e}")
@@ -169,8 +199,9 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
             "damage_dealt": {"Ninja": 0, "Faze Jarvis": 0},
             "survival_time": {"Ninja": 0, "Faze Jarvis": 0},
             "epsilon": {"Ninja": 0, "Faze Jarvis": 0},
-            "learning_rate": {"Ninja": 0, "Faze Jarvis": 0}
+            "learning_rate": {"Ninja": 0, "Faze Jarvis": 0},
         }, 0, [None, None]
+
 
 def main(num_environments=4, device=None, num_epochs=1000, training=True):
     # Environment parameters
@@ -226,27 +257,17 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
         }
     }
 
-    # Save configuration
-    with open(f"{run_dir}/config.json", "w") as f:
-        json.dump(config, f, indent=4)
-
-    # Save command-line arguments
-    with open(f"{run_dir}/args.json", "w") as f:
-        json.dump({
-            "num_environments": num_environments,
-            "device": device,
-            "num_epochs": num_epochs
-        }, f, indent=4)
-
     # Create initial environment to get world bounds
-    env = Env(training=training,
-              use_game_ui=False,
-              world_width=world_width,
-              world_height=world_height,
-              display_width=display_width,
-              display_height=display_height,
-              n_of_obstacles=n_of_obstacles,
-              frame_skip=config["frame_skip"])
+    env = Env(
+        training=training,
+        use_game_ui=False,
+        world_width=world_width,
+        world_height=world_height,
+        display_width=display_width,
+        display_height=display_height,
+        n_of_obstacles=n_of_obstacles,
+        frame_skip=config["frame_skip"],
+    )
     world_bounds = env.get_world_bounds()
 
     # Curriculum learning parameters
@@ -254,7 +275,7 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
         {"n_obstacles": 10, "duration": 100},
         {"n_obstacles": 15, "duration": 200},
         {"n_obstacles": 20, "duration": 300},
-        {"n_obstacles": 25, "duration": 400}
+        {"n_obstacles": 25, "duration": 400},
     ]
 
     # Setup shared memory and synchronization (only needed for parallel mode)
@@ -266,7 +287,7 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
     # Shared epsilon values for each bot with proper synchronization
     shared_epsilon = manager.dict({
         "Ninja": manager.Value('f', 1.0),
-        "Faze Jarvis": manager.Value('f', 1.0)
+        "Faze Jarvis": manager.Value('f', 1.0),
     })
 
     # Shared training history
@@ -276,9 +297,9 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
         "current_epoch": manager.Value('i', 0),
         "best_rewards": manager.dict({
             "Ninja": manager.Value('f', float('-inf')),
-            "Faze Jarvis": manager.Value('f', float('-inf'))
+            "Faze Jarvis": manager.Value('f', float('-inf')),
         }),
-        "last_save": manager.Value('i', 0)
+        "last_save": manager.Value('i', 0),
     })
 
     # Shared metrics with proper synchronization
@@ -290,7 +311,7 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
         "damage_dealt": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
         "survival_time": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
         "epsilon": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
-        "learning_rates": {"Ninja": manager.list(), "Faze Jarvis": manager.list()}
+        "learning_rates": {"Ninja": manager.list(), "Faze Jarvis": manager.list()},
     })
 
     # Models for non-parallel mode
@@ -305,50 +326,49 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                     # Create a temporary bot to load the model
                     temp_bot = MyBot(action_size=config["action_size"])
                     try:
-                        # Try to load model with the specified device
+                        # Try to load the full checkpoint via MyBot.load
                         temp_bot.load(save_path, map_location=device)
 
-                        try:
-                            # Store the model state in shared memory or local storage
-                            # First detach tensors from device to avoid MPS-specific issues with deepcopy
-                            model_state_dict = temp_bot.model.state_dict()
-                            print(f"Successfully obtained model_state_dict with keys: {list(model_state_dict.keys())}")
+                        # Convert everything to CPU for storing in the manager
+                        temp_bot.model.cpu()
+                        temp_bot.optimizer.state = {
+                            k: {
+                                subk: v.cpu() for subk, v in val.items()
+                                if isinstance(v, torch.Tensor)
+                            } if isinstance(val, dict) else val
+                            for k, val in temp_bot.optimizer.state.items()
+                        }
 
-                            cpu_state_dict = {k: v.detach().cpu() for k, v in model_state_dict.items()}
-                            print(f"Successfully detached tensors to CPU")
+                        # Obtain the in-memory dict
+                        model_checkpoint = temp_bot.save_to_dict()
 
-                            model_state = copy.deepcopy(cpu_state_dict)
-                            print(f"Successfully created deep copy of model state")
+                        if num_environments > 1:
+                            shared_models[idx] = model_checkpoint
+                        local_models[idx] = model_checkpoint
 
-                            if num_environments > 1:
-                                shared_models[idx] = model_state
-                            local_models[idx] = model_state
-
-                            print(f"Loaded model {idx} from {save_path} to {device}")
-                        except Exception as inner_e:
-                            print(f"Error processing model after loading: {inner_e}")
-                            raise inner_e
+                        print(f"Loaded model {idx} from {save_path} to {device}")
                     except Exception as e:
                         print(f"Error loading model to {device}: {e}")
                         print(f"Trying to load to CPU instead")
-                        temp_bot.load(save_path, map_location="cpu")
-
                         try:
-                            # Use the same approach for CPU fallback
-                            model_state_dict = temp_bot.model.state_dict()
-                            print(f"Successfully obtained model_state_dict with keys: {list(model_state_dict.keys())}")
-
-                            # No need to detach/move to CPU since we're already on CPU
-                            model_state = copy.deepcopy(model_state_dict)
-                            print(f"Successfully created deep copy of model state")
+                            temp_bot.load(save_path, map_location="cpu")
+                            temp_bot.model.cpu()
+                            temp_bot.optimizer.state = {
+                                k: {
+                                    subk: v.cpu() for subk, v in val.items()
+                                    if isinstance(v, torch.Tensor)
+                                } if isinstance(val, dict) else val
+                                for k, val in temp_bot.optimizer.state.items()
+                            }
+                            model_checkpoint = temp_bot.save_to_dict()
 
                             if num_environments > 1:
-                                shared_models[idx] = model_state
-                            local_models[idx] = model_state
+                                shared_models[idx] = model_checkpoint
+                            local_models[idx] = model_checkpoint
                             print(f"Loaded model {idx} from {save_path} to CPU")
                         except Exception as cpu_e:
                             print(f"Error processing model after loading to CPU: {cpu_e}")
-                            # Continue with a fresh model instead of raising the exception
+                            # Continue with a fresh model instead
                             print(f"Starting with a fresh model for bot {idx}")
                 else:
                     print(f"No saved model found for bot {idx}, starting fresh")
@@ -363,21 +383,23 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
         print(f"Using parallel training with {num_environments} environments")
         # Setup parallel processing with error handling
         try:
-            num_processes = min(max(1, cpu_count() - 1), num_environments)  # Leave one CPU free, cap at num_environments
+            num_processes = min(max(1, cpu_count() - 1), num_environments)
             print(f"Starting training with {num_processes} processes")
             pool = Pool(processes=num_processes)
 
             # Create partial function with fixed arguments
-            train_episode_partial = partial(train_episode,
-                                          config=config,
-                                          curriculum_stages=curriculum_stages,
-                                          world_bounds=world_bounds,
-                                          display_width=display_width,
-                                          display_height=display_height,
-                                          shared_models=shared_models,
-                                          shared_history=shared_history,
-                                          shared_epsilon=shared_epsilon,
-                                          training=training)
+            train_episode_partial = partial(
+                train_episode,
+                config=config,
+                curriculum_stages=curriculum_stages,
+                world_bounds=world_bounds,
+                display_width=display_width,
+                display_height=display_height,
+                shared_models=shared_models,
+                shared_history=shared_history,
+                shared_epsilon=shared_epsilon,
+                training=training
+            )
 
             # Calculate number of batches needed to reach num_epochs
             num_batches = (num_epochs + num_processes - 1) // num_processes
@@ -402,10 +424,10 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                     results = pool.map_async(train_episode_partial, epoch_indices)
                     results = results.get(timeout=3600)  # 1-hour timeout per batch
 
-                    # Aggregate results with error handling
+                    # Aggregate results
                     for i, (episode_metrics, steps, model_states) in enumerate(results):
                         try:
-                            # Get the actual epoch number
+                            # Actual epoch
                             epoch = start_epoch + i
 
                             # Update shared history
@@ -427,8 +449,11 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                                 if episode_metrics["rewards"][player] > shared_history["best_rewards"][player].value:
                                     shared_history["best_rewards"][player].value = episode_metrics["rewards"][player]
 
-                                # Calculate average rewards
-                                avg_reward = sum(metrics["episode_rewards"][player][-10:]) / min(10, len(metrics["episode_rewards"][player]))
+                                # Average rewards
+                                avg_reward = (
+                                    sum(metrics["episode_rewards"][player][-10:])
+                                    / min(10, len(metrics["episode_rewards"][player]))
+                                )
                                 metrics["avg_rewards"][player].append(avg_reward)
 
                                 print(f"Epoch {epoch + 1}/{num_epochs} - {player}: "
@@ -439,64 +464,58 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                                       f"Epsilon = {episode_metrics['epsilon'][player]:.4f}")
 
                             # Update shared models after each epoch
-                            for idx, model_state in enumerate(model_states):
-                                if model_state is not None:
-                                    shared_models[idx] = model_state
-                                    local_models[idx] = model_state  # Also update local storage
+                            for idx, model_checkpoint in enumerate(model_states):
+                                if model_checkpoint is not None:
+                                    shared_models[idx] = model_checkpoint
+                                    local_models[idx] = model_checkpoint
 
                         except Exception as e:
                             print(f"Error processing epoch {start_epoch + i} metrics: {e}")
                             continue
 
-                    # Save metrics and plots periodically with error handling
+                    # Save metrics and plots periodically
                     current_epoch = shared_history["current_epoch"].value
                     if (current_epoch % 1 == 0) or current_epoch >= num_epochs:
                         print("Saving metrics and models...")
                         try:
-                            # Convert shared memory metrics to regular dict for saving
+                            # Convert shared memory metrics to regular dict
                             save_metrics = {}
 
-                            # Helper function to convert ListProxy to regular list
                             def convert_to_serializable(obj):
                                 if isinstance(obj, (list, tuple)):
                                     return [convert_to_serializable(x) for x in obj]
-                                # Handle ListProxy objects from multiprocessing
                                 elif str(type(obj).__name__) == 'ListProxy':
                                     return [convert_to_serializable(x) for x in obj]
                                 elif isinstance(obj, dict):
                                     return {k: convert_to_serializable(v) for k, v in obj.items()}
-                                elif hasattr(obj, 'value'):  # Handle Value objects
+                                elif hasattr(obj, 'value'):  # handle multiprocessing.Value
                                     return obj.value
                                 return obj
 
-                            # Convert all metrics to serializable format
                             for k, v in metrics.items():
                                 try:
                                     save_metrics[k] = convert_to_serializable(v)
                                 except Exception as e:
                                     print(f"Error converting metric {k}: {e}")
-                                    save_metrics[k] = []  # Provide empty default
+                                    save_metrics[k] = []
 
-                            # Add shared history to saved metrics
+                            # Add shared history
                             save_metrics["shared_history"] = {
                                 "total_steps": shared_history["total_steps"].value,
                                 "total_episodes": shared_history["total_episodes"].value,
                                 "current_epoch": shared_history["current_epoch"].value,
                                 "best_rewards": {
-                                    player: shared_history["best_rewards"][player].value 
+                                    player: shared_history["best_rewards"][player].value
                                     for player in ["Ninja", "Faze Jarvis"]
-                                }
+                                },
                             }
 
-                            # Save metrics with proper file locking and error handling
+                            # Save metrics
                             metrics_file = f"{run_dir}/metrics.json"
+                            temp_file = f"{metrics_file}.tmp"
                             try:
-                                # First save to a temporary file
-                                temp_file = f"{metrics_file}.tmp"
                                 with open(temp_file, "w") as f:
                                     json.dump(save_metrics, f, indent=4)
-
-                                # If successful, rename to the actual file
                                 os.replace(temp_file, metrics_file)
                                 print(f"Successfully saved metrics to {metrics_file}")
                             except Exception as e:
@@ -505,64 +524,38 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                                     os.remove(temp_file)
                                 raise
 
-                            # Create and save plots with error handling
+                            # Create and save plots
                             try:
                                 create_training_plots(save_metrics, run_dir, current_epoch)
                             except Exception as e:
                                 print(f"Error creating plots: {e}")
-                                # Continue with model saving even if plots fail
 
-                            # Save model checkpoints with proper synchronization
-                            for idx, model_state in enumerate(shared_models):
-                                if model_state is not None:
+                            # Save model checkpoints
+                            for idx, model_checkpoint in enumerate(shared_models):
+                                if model_checkpoint is not None:
                                     try:
-                                        # Ensure the model state is on CPU before saving
-                                        if isinstance(model_state, dict):
-                                            # Convert all tensors in the state dict to CPU
-                                            cpu_state = {k: v.cpu() if torch.is_tensor(v) else v 
-                                                       for k, v in model_state.items()}
-                                        else:
-                                            cpu_state = model_state.cpu() if torch.is_tensor(model_state) else model_state
+                                        temp_bot = MyBot(action_size=config["action_size"])
+                                        temp_bot.load_from_dict(model_checkpoint, map_location="cpu")
 
-                                        # Create directories if they don't exist
                                         os.makedirs(f"{run_dir}/models", exist_ok=True)
 
-                                        # Save checkpoint with error handling
+                                        # Save checkpoint with MyBot.save
                                         save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}.pth"
-                                        temp_path = f"{save_path}.tmp"
+                                        temp_bot.save(save_path)
+                                        print(f"Successfully saved model {idx} checkpoint at epoch {current_epoch}")
 
-                                        try:
-                                            # Save to temporary file first
-                                            torch.save(cpu_state, temp_path)
-                                            # If successful, rename to actual file
-                                            os.replace(temp_path, save_path)
-                                            print(f"Successfully saved model {idx} checkpoint at epoch {current_epoch}")
+                                        # Also save to standard location
+                                        standard_path = f"bot_model_{idx}.pth"
+                                        temp_bot.save(standard_path)
+                                        print(f"Successfully saved model {idx} to standard location")
 
-                                            # Also save to standard location
-                                            torch.save(cpu_state, f"bot_model_{idx}.pth")
-                                            print(f"Successfully saved model {idx} to standard location")
-
-                                            # Save backup
-                                            backup_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}_backup.pth"
-                                            torch.save(cpu_state, backup_path)
-                                            print(f"Successfully saved backup model {idx} at epoch {current_epoch}")
-
-                                        except Exception as model_e:
-                                            print(f"Error saving model {idx} at epoch {current_epoch}: {model_e}")
-                                            if os.path.exists(temp_path):
-                                                os.remove(temp_path)
-                                            raise
+                                        # Save backup
+                                        backup_path = f"{run_dir}/models/bot_model_{idx}_epoch_{current_epoch}_backup.pth"
+                                        temp_bot.save(backup_path)
+                                        print(f"Successfully saved backup model {idx} at epoch {current_epoch}")
 
                                     except Exception as model_e:
-                                        print(f"Critical error saving model {idx}: {model_e}")
-                                        print(f"Model state type: {type(model_state)}")
-                                        if isinstance(model_state, dict):
-                                            print(f"Model state keys: {model_state.keys()}")
-                                        continue
-
-                            # Update last save timestamp
-                            shared_history["last_save"].value = current_epoch
-
+                                        print(f"Error saving model {idx} at epoch {current_epoch}: {model_e}")
                         except Exception as e:
                             print(f"Error in save operation: {e}")
                             print(f"Error details: {str(e)}")
@@ -577,15 +570,15 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                     print(f"Error in batch {batch + 1}: {e}")
                     # Try to recover by saving current state
                     try:
-                        # Ensure recovery directory exists
                         os.makedirs("recovery", exist_ok=True)
-                        for idx, model_state in enumerate(shared_models):
-                            if model_state is not None:
+                        for idx, model_checkpoint in enumerate(shared_models):
+                            if model_checkpoint is not None:
                                 recovery_path = f"recovery/bot_model_{idx}_recovery_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
-                                torch.save(model_state, recovery_path)
+                                temp_bot = MyBot(action_size=config["action_size"])
+                                temp_bot.load_from_dict(model_checkpoint, map_location="cpu")
+                                temp_bot.save(recovery_path)
                                 print(f"Saved recovery model to {recovery_path}")
-                                # Also save to standard location
-                                torch.save(model_state, f"bot_model_{idx}_recovery.pth")
+                                temp_bot.save(f"bot_model_{idx}_recovery.pth")
                     except Exception as recovery_e:
                         print(f"Error during recovery: {recovery_e}")
 
@@ -593,7 +586,6 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
             print(f"Critical error during training: {e}")
             raise
         finally:
-            # Cleanup with error handling
             try:
                 pool.close()
                 pool.join()
@@ -614,7 +606,7 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
             "damage_dealt": {"Ninja": [], "Faze Jarvis": []},
             "survival_time": {"Ninja": [], "Faze Jarvis": []},
             "epsilon": {"Ninja": [], "Faze Jarvis": []},
-            "learning_rates": {"Ninja": [], "Faze Jarvis": []}
+            "learning_rates": {"Ninja": [], "Faze Jarvis": []},
         }
 
         total_steps = 0
@@ -622,8 +614,7 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
         best_rewards = {"Ninja": float('-inf'), "Faze Jarvis": float('-inf')}
 
         try:
-            # Before the training loop
-            start_time = time.time()  # Record the start time
+            start_time = time.time()
 
             # Training loop for non-parallel mode
             for epoch in range(config["num_epochs"]):
@@ -635,59 +626,50 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                     for i, stage in enumerate(curriculum_stages):
                         if epoch >= sum(s["duration"] for s in curriculum_stages[:i]):
                             current_stage = i
-
                     current_obstacles = curriculum_stages[current_stage]["n_obstacles"]
 
-                    # Create environment for this episode
-                    env = Env(training=training,
-                              use_game_ui=False,
-                              world_width=world_bounds[2] - world_bounds[0],
-                              world_height=world_bounds[3] - world_bounds[1],
-                              display_width=display_width,
-                              display_height=display_height,
-                              n_of_obstacles=current_obstacles,
-                              frame_skip=config["frame_skip"])
+                    env = Env(
+                        training=training,
+                        use_game_ui=False,
+                        world_width=world_bounds[2] - world_bounds[0],
+                        world_height=world_bounds[3] - world_bounds[1],
+                        display_width=display_width,
+                        display_height=display_height,
+                        n_of_obstacles=current_obstacles,
+                        frame_skip=config["frame_skip"],
+                    )
 
-                    # Setup players
                     players = [
                         Character((world_bounds[2] - 100, world_bounds[3] - 100),
                                   env.world_surface, boundaries=world_bounds, username="Ninja"),
-                        Character((world_bounds[0] + 10, world_bounds[1]+10),
-                                  env.world_surface, boundaries=world_bounds, username="Faze Jarvis")
+                        Character((world_bounds[0] + 10, world_bounds[1] + 10),
+                                  env.world_surface, boundaries=world_bounds, username="Faze Jarvis"),
                     ]
 
-                    # Create bots with local models
                     bots = []
                     for idx in range(2):
-                        try:
-                            bot = MyBot(action_size=config["action_size"])
-                            bot.use_double_dqn = config["hyperparameters"]["double_dqn"]
-                            bot.learning_rate = config["hyperparameters"]["learning_rate"]
-                            bot.batch_size = config["hyperparameters"]["batch_size"]
-                            bot.gamma = config["hyperparameters"]["gamma"]
-                            bot.epsilon_decay = config["hyperparameters"]["epsilon_decay"]
+                        bot = MyBot(action_size=config["action_size"])
+                        bot.use_double_dqn = config["hyperparameters"]["double_dqn"]
+                        bot.learning_rate = config["hyperparameters"]["learning_rate"]
+                        bot.batch_size = config["hyperparameters"]["batch_size"]
+                        bot.gamma = config["hyperparameters"]["gamma"]
+                        bot.epsilon_decay = config["hyperparameters"]["epsilon_decay"]
 
-                            # Move model to appropriate device
-                            bot.device = torch.device(device)
-                            bot.model = bot.model.to(bot.device)
-                            bot.target_model = bot.target_model.to(bot.device)
+                        bot.device = torch.device(device)
+                        bot.model = bot.model.to(bot.device)
+                        bot.target_model = bot.target_model.to(bot.device)
+                        bot.optimizer = torch.optim.Adam(bot.model.parameters(), lr=bot.learning_rate)
 
-                            bot.optimizer = torch.optim.Adam(bot.model.parameters(), lr=bot.learning_rate)
+                        # Load local model if present
+                        if local_models[idx] is not None:
+                            try:
+                                bot.load_from_dict(local_models[idx], map_location=device)
+                            except Exception as e:
+                                print(f"Error loading model state for bot {idx}: {e}")
+                                print("Starting with fresh model state")
 
-                            # Load local model state
-                            if local_models[idx] is not None:
-                                try:
-                                    bot.model.load_state_dict(local_models[idx])
-                                    bot.target_model.load_state_dict(local_models[idx])
-                                except Exception as e:
-                                    print(f"Error loading model state for bot {idx}: {e}")
-                                    print("Starting with fresh model state")
-                            bots.append(bot)
-                        except Exception as e:
-                            print(f"Error creating bot {idx}: {e}")
-                            raise
+                        bots.append(bot)
 
-                    # Link everything together
                     env.set_players_bots_objects(players, bots)
                     env.reset(randomize_objects=True)
                     env.steps = 0
@@ -698,17 +680,15 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                     for bot in bots:
                         bot.reset_for_new_episode()
 
-                    # Track episode metrics
                     episode_metrics = {
                         "rewards": {player.username: 0 for player in players},
                         "kills": {player.username: 0 for player in players},
                         "damage_dealt": {player.username: 0 for player in players},
                         "survival_time": {player.username: 0 for player in players},
                         "epsilon": {player.username: 0 for player in players},
-                        "learning_rate": {player.username: 0 for player in players}
+                        "learning_rate": {player.username: 0 for player in players},
                     }
 
-                    # Training loop for a single episode
                     while True:
                         if env.steps > config["tick_limit"]:
                             break
@@ -754,7 +734,6 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                         if finished:
                             break
 
-                    # Update local metrics and models
                     total_steps += env.steps
                     total_episodes += 1
 
@@ -767,11 +746,9 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                         local_metrics["epsilon"][player].append(episode_metrics["epsilon"][player])
                         local_metrics["learning_rates"][player].append(episode_metrics["learning_rate"][player])
 
-                        # Update best rewards
                         if episode_metrics["rewards"][player] > best_rewards[player]:
                             best_rewards[player] = episode_metrics["rewards"][player]
 
-                        # Calculate average rewards
                         avg_reward = sum(local_metrics["episode_rewards"][player][-10:]) / min(10, len(local_metrics["episode_rewards"][player]))
                         local_metrics["avg_rewards"][player].append(avg_reward)
 
@@ -782,97 +759,98 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
                               f"Damage = {episode_metrics['damage_dealt'][player]:.1f}, "
                               f"Epsilon = {episode_metrics['epsilon'][player]:.4f}")
 
-                    # Update local models
+                    # Save updated model checkpoints after each epoch
                     for idx, bot in enumerate(bots):
-                        local_models[idx] = copy.deepcopy(bot.model.state_dict())
+                        # Move to CPU for consistent saving
+                        bot.model.cpu()
+                        bot.optimizer.state = {
+                            k: {
+                                subk: v.cpu() for subk, v in val.items()
+                                if isinstance(v, torch.Tensor)
+                            } if isinstance(val, dict) else val
+                            for k, val in bot.optimizer.state.items()
+                        }
+                        local_models[idx] = bot.save_to_dict()
 
-                    # Save metrics and plots periodically
                     if (epoch + 1) % 10 == 0 or epoch == config["num_epochs"] - 1:
                         try:
-                            # Add history to saved metrics
                             save_metrics = copy.deepcopy(local_metrics)
                             save_metrics["shared_history"] = {
                                 "total_steps": total_steps,
                                 "total_episodes": total_episodes,
                                 "current_epoch": epoch + 1,
-                                "best_rewards": best_rewards
+                                "best_rewards": best_rewards,
                             }
 
-                            # Save metrics with proper file locking and error handling
                             metrics_file = f"{run_dir}/metrics.json"
+                            temp_file = f"{metrics_file}.tmp"
                             try:
-                                # First save to a temporary file
-                                temp_file = f"{metrics_file}.tmp"
                                 with open(temp_file, "w") as f:
                                     json.dump(save_metrics, f, indent=4)
-
-                                # If successful, rename to the actual file
                                 os.replace(temp_file, metrics_file)
                                 print(f"Successfully saved metrics to {metrics_file}")
                             except Exception as e:
                                 print(f"Error saving metrics file: {e}")
                                 if os.path.exists(temp_file):
                                     os.remove(temp_file)
-                                # Try direct save as fallback
+                                # Fallback
                                 with open(metrics_file, "w") as f:
                                     json.dump(save_metrics, f, indent=4)
                                 print(f"Saved metrics directly as fallback")
 
-                            # Create and save plots with error handling
                             try:
-                                create_training_plots(save_metrics, run_dir, epoch+1)
+                                create_training_plots(save_metrics, run_dir, epoch + 1)
                                 print(f"Successfully created plots for epoch {epoch+1}")
                             except Exception as e:
                                 print(f"Error creating plots: {e}")
-                                # Continue with model saving even if plots fail
 
                             # Save model checkpoints
-                            for idx, model_state in enumerate(local_models):
-                                if model_state is not None:
+                            for idx, model_checkpoint in enumerate(local_models):
+                                if model_checkpoint is not None:
                                     try:
+                                        temp_bot = MyBot(action_size=config["action_size"])
+                                        temp_bot.load_from_dict(model_checkpoint, map_location="cpu")
+
                                         save_path = f"{run_dir}/models/bot_model_{idx}_epoch_{epoch+1}.pth"
-                                        torch.save(model_state, save_path)
+                                        temp_bot.save(save_path)
                                         print(f"Successfully saved model {idx} checkpoint at epoch {epoch+1}")
 
-                                        # Also save to standard location for easy loading
-                                        torch.save(model_state, f"bot_model_{idx}.pth")
+                                        torch.save(model_checkpoint, f"bot_model_{idx}.pth")
                                         print(f"Successfully saved model {idx} to standard location")
                                     except Exception as model_e:
                                         print(f"Error saving model {idx} at epoch {epoch+1}: {model_e}")
-                                        # Ensure directory exists
+                                        # Attempt directory creation
                                         os.makedirs(f"{run_dir}/models", exist_ok=True)
                                         try:
-                                            torch.save(model_state, save_path)
-                                            torch.save(model_state, f"bot_model_{idx}.pth")
+                                            temp_bot.save(save_path)
+                                            torch.save(model_checkpoint, f"bot_model_{idx}.pth")
                                             print(f"Successfully saved model {idx} after creating directory")
                                         except Exception as model_e2:
                                             print(f"Still could not save model {idx}: {model_e2}")
                         except Exception as e:
                             print(f"Error saving metrics or models: {e}")
 
-                    # After the training loop for each epoch
-                    total_steps += env.steps  # Sum steps from all environments
-                    elapsed_time = time.time() - start_time  # Calculate elapsed time
-                    steps_per_second = total_steps / elapsed_time if elapsed_time > 0 else 0  # Calculate steps per second
+                    elapsed_time = time.time() - start_time
+                    steps_per_second = total_steps / elapsed_time if elapsed_time > 0 else 0
 
                     print(f"Epoch {epoch + 1}/{config['num_epochs']} - Steps per second: {steps_per_second:.2f}")
 
-                    # Reset total_steps for the next epoch if needed
-                    total_steps = 0  # Reset for the next epoch if you want to track per epoch
+                    # Reset total_steps if you only want per-epoch measure
+                    total_steps = 0
 
                 except Exception as e:
                     print(f"Error in epoch {epoch + 1}: {e}")
-                    # Try to recover by saving current state
+                    # Try to recover
                     try:
-                        # Ensure recovery directory exists
                         os.makedirs("recovery", exist_ok=True)
-                        for idx, model_state in enumerate(local_models):
-                            if model_state is not None:
+                        for idx, model_checkpoint in enumerate(local_models):
+                            if model_checkpoint is not None:
                                 recovery_path = f"recovery/bot_model_{idx}_recovery_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"
-                                torch.save(model_state, recovery_path)
+                                temp_bot = MyBot(action_size=config["action_size"])
+                                temp_bot.load_from_dict(model_checkpoint, map_location="cpu")
+                                temp_bot.save(recovery_path)
                                 print(f"Saved recovery model to {recovery_path}")
-                                # Also save to standard location
-                                torch.save(model_state, f"bot_model_{idx}_recovery.pth")
+                                temp_bot.save(f"bot_model_{idx}_recovery.pth")
                     except Exception as recovery_e:
                         print(f"Error during recovery: {recovery_e}")
 
@@ -880,13 +858,12 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
             print(f"Critical error during training: {e}")
             raise
         finally:
-            # Cleanup
             try:
                 pygame.quit()
             except Exception as e:
                 print(f"Error during cleanup: {e}")
 
-    # Print final training stats
+    # Print final stats
     if use_parallel:
         print(f"Training complete! Results saved to {run_dir}")
         print(f"Total steps: {shared_history['total_steps'].value}")
@@ -903,15 +880,15 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
         for player in ["Ninja", "Faze Jarvis"]:
             print(f"{player}: {best_rewards[player]:.2f}")
 
+
 def create_training_plots(metrics, run_dir, epoch):
-    """Create and save training performance plots"""
+    """Create and save training performance plots."""
     plt.figure(figsize=(15, 10))
 
-    # Get total number of episodes for x-axis
     total_episodes = len(metrics["episode_rewards"]["Ninja"])
     x_values = list(range(1, total_episodes + 1))
 
-    # Plot rewards
+    # 1) Rewards
     plt.subplot(2, 2, 1)
     colors = {'Ninja': 'blue', 'Faze Jarvis': 'red'}
 
@@ -919,7 +896,7 @@ def create_training_plots(metrics, run_dir, epoch):
         plt.plot(x_values, rewards, label=f"{player} Rewards", color=colors.get(player))
 
     for player, avg_rewards in metrics["avg_rewards"].items():
-        plt.plot(x_values, avg_rewards, label=f"{player} Avg(10) Rewards", 
+        plt.plot(x_values, avg_rewards, label=f"{player} Avg(10) Rewards",
                  linestyle='--', color=colors.get(player), alpha=0.7)
 
     plt.title("Rewards per Epoch")
@@ -928,33 +905,32 @@ def create_training_plots(metrics, run_dir, epoch):
     plt.legend()
     plt.grid(True)
 
-    # Plot kills - improved clarity
+    # 2) Kills
     plt.subplot(2, 2, 2)
-
     for player, kills in metrics["kills"].items():
-        # Use a bar chart for better visibility of discrete kill counts
-        plt.bar([e - 0.2 if player == 'Ninja' else e + 0.2 for e in x_values], 
-                kills, 
-                width=0.4,
-                color=colors.get(player),
-                label=f"{player} Kills")
-
+        plt.bar(
+            [e - 0.2 if player == 'Ninja' else e + 0.2 for e in x_values],
+            kills,
+            width=0.4,
+            color=colors.get(player),
+            label=f"{player} Kills"
+        )
     plt.title("Kills per Epoch")
     plt.xlabel("Epoch")
     plt.ylabel("Kills")
     plt.legend()
     plt.grid(True)
 
-    # Plot damage dealt
+    # 3) Damage Dealt
     plt.subplot(2, 2, 3)
     markers = {'Ninja': 'o', 'Faze Jarvis': 's'}
 
     for player, damage in metrics["damage_dealt"].items():
-        plt.plot(x_values, damage, label=f"{player} Damage", 
-                color=colors.get(player),
-                marker=markers.get(player, 'x'),
-                markersize=4,
-                markevery=max(1, len(damage)//20))  # Show markers every ~20 points
+        plt.plot(x_values, damage, label=f"{player} Damage",
+                 color=colors.get(player),
+                 marker=markers.get(player, 'x'),
+                 markersize=4,
+                 markevery=max(1, len(damage)//20))
 
     plt.title("Damage Dealt per Epoch")
     plt.xlabel("Epoch")
@@ -962,37 +938,27 @@ def create_training_plots(metrics, run_dir, epoch):
     plt.legend()
     plt.grid(True)
 
-    # Plot epsilon and learning rate
+    # 4) Epsilon and LR
     plt.subplot(2, 2, 4)
-
-    # Primary y-axis for epsilon
     ax1 = plt.gca()
     for player, epsilon in metrics["epsilon"].items():
         ax1.plot(x_values, epsilon, label=f"{player} Epsilon",
-                color=colors.get(player),
-                linestyle='-')
-
+                 color=colors.get(player), linestyle='-')
     ax1.set_xlabel("Epoch")
     ax1.set_ylabel("Epsilon")
 
-    # Secondary y-axis for learning rate
     ax2 = ax1.twinx()
     for player, lr in metrics["learning_rates"].items():
         ax2.plot(x_values, lr, label=f"{player} LR",
-                color=colors.get(player),
-                linestyle=':', alpha=0.7)
-
+                 color=colors.get(player), linestyle=':', alpha=0.7)
     ax2.set_ylabel("Learning Rate")
 
-    # Combine legends
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
-
     plt.title("Exploration and Learning Rates")
     ax1.grid(True)
 
-    # Add overall metrics as text annotation
     if "shared_history" in metrics:
         hist = metrics["shared_history"]
         info_text = (
@@ -1000,9 +966,7 @@ def create_training_plots(metrics, run_dir, epoch):
             f"Total Steps: {hist.get('total_steps', sum(metrics['episode_steps']))}\n"
             f"Best Rewards:\n"
         )
-
         for player, val in hist.get('best_rewards', {}).items():
-            # Safely check the type to avoid isinstance errors
             if hasattr(val, 'value'):
                 info_text += f"  {player}: {val.value:.2f}\n"
             elif isinstance(val, (int, float)):
@@ -1010,7 +974,7 @@ def create_training_plots(metrics, run_dir, epoch):
             else:
                 info_text += f"  {player}: {str(val)}\n"
 
-        plt.figtext(0.02, 0.02, info_text, fontsize=9, 
+        plt.figtext(0.02, 0.02, info_text, fontsize=9,
                     bbox=dict(facecolor='white', alpha=0.8))
 
     plt.tight_layout()
@@ -1019,18 +983,17 @@ def create_training_plots(metrics, run_dir, epoch):
         print(f"Successfully saved training progress plot for epoch {epoch}")
     except Exception as e:
         print(f"Error saving training progress plot for epoch {epoch}: {e}")
-        # Ensure directory exists
         os.makedirs(f"{run_dir}/plots", exist_ok=True)
         try:
             plt.savefig(f"{run_dir}/plots/training_progress_epoch_{epoch}.png")
-            print(f"Successfully saved training progress plot after creating directory")
+            print("Successfully saved training progress plot after creating directory")
         except Exception as e2:
             print(f"Still could not save training progress plot: {e2}")
 
-    # Create additional plots for more metrics
+    # Additional metrics: steps and survival
     plt.figure(figsize=(15, 5))
 
-    # Plot episode steps
+    # Steps per epoch
     plt.subplot(1, 2, 1)
     plt.plot(x_values, metrics["episode_steps"], 'g-', label="Episode Length")
     plt.title("Steps per Epoch")
@@ -1039,12 +1002,11 @@ def create_training_plots(metrics, run_dir, epoch):
     plt.grid(True)
     plt.legend()
 
-    # Plot survival time
+    # Survival
     plt.subplot(1, 2, 2)
     for player, survival in metrics["survival_time"].items():
         plt.plot(x_values, survival, label=f"{player} Survival",
-                color=colors.get(player))
-
+                 color=colors.get(player))
     plt.title("Survival Time per Epoch")
     plt.xlabel("Epoch")
     plt.ylabel("Time Steps")
@@ -1057,20 +1019,19 @@ def create_training_plots(metrics, run_dir, epoch):
         print(f"Successfully saved plots for epoch {epoch}")
     except Exception as e:
         print(f"Error saving additional metrics plot for epoch {epoch}: {e}")
-        # Ensure directory exists
         os.makedirs(f"{run_dir}/plots", exist_ok=True)
         try:
             plt.savefig(f"{run_dir}/plots/additional_metrics_epoch_{epoch}.png")
-            print(f"Successfully saved plots after creating directory")
+            print("Successfully saved plots after creating directory")
         except Exception as e2:
             print(f"Still could not save plot: {e2}")
     finally:
         plt.close('all')
 
+
 if __name__ == "__main__":
-    # Parse command-line arguments
     parser = argparse.ArgumentParser(description='Train reinforcement learning bots')
-    parser.add_argument('--num_environments', type=int, default=4, 
+    parser.add_argument('--num_environments', type=int, default=8,
                         help='Number of parallel environments to use. Set to 1 to disable parallelization.')
     parser.add_argument('--device', type=str, default=None,
                         help='Device to use (cuda, cpu, mps). If not specified, best available device will be used.')
@@ -1085,7 +1046,6 @@ if __name__ == "__main__":
     # Set up screen for pygame
     screen = pygame.display.set_mode((800, 800))
 
-    # Override main() parameters with command-line arguments
     main_kwargs = {
         'num_environments': args.num_environments,
         'device': args.device,
@@ -1093,5 +1053,4 @@ if __name__ == "__main__":
         'training': args.training
     }
 
-    # Run main with arguments
     main(**main_kwargs)
