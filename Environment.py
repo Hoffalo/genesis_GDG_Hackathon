@@ -230,10 +230,10 @@ class Env:
                 "players_info": players_info
             }
 
-            # Store the final state
+            # store the final state
             final_info = new_dic
 
-            # Check if game is over
+            # check if game is over
             if len(alive_players) == 1:
                 print("Game Over, winner is:", alive_players[0].username)
                 if not self.training_mode:
@@ -245,33 +245,33 @@ class Env:
                 game_over = True
                 break
 
-        # Skip all rendering operations in training mode for better performance
+        # skip all rendering operations in training mode for better performance
         if not self.training_mode:
             if self.use_advanced_UI:
                 self.advanced_UI.draw_everything(final_info, self.players, self.obstacles)
             else:
-                # Draw obstacles manually if not using advanced UI
+                # draw obstacles manually if not using advanced UI
                 for obstacle in self.obstacles:
                     obstacle.draw(self.world_surface)
 
-            # Scale and display the world surface
+            # scale and display the world surface
             scaled_surface = pygame.transform.scale(self.world_surface, (self.display_width, self.display_height))
             self.screen.blit(scaled_surface, (0, 0))
             pygame.display.flip()
 
-        # In training mode, use a high tick rate but not unreasonably high
+        # in training mode, use a high tick rate but not unreasonably high
         if not self.training_mode:
-            self.clock.tick(120)  # Normal gameplay speed
+            self.clock.tick(120)  # normal gameplay speed
         else:
-            # Skip the clock tick entirely in training mode for maximum speed
-            pass  # No tick limiting in training mode for maximum speed
+            # skip the clock tick entirely in training mode for maximum speed
+            pass  # no tick limiting in training mode for maximum speed
 
-        # Return the final state
+        # return the final state
         if game_over:
             print("Total steps:", self.steps)
             return True, final_info  # Game is over
         else:
-            # Return the final state from the last frame
+            # return the final state from the last frame
             return False, final_info
 
     def find_closest_opponent(self, player):
