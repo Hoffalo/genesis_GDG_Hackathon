@@ -4,7 +4,6 @@ import pygame
 from advanced_UI import game_UI
 from components.world_gen import spawn_objects
 
-
 # TODO: add controls for multiple players
 # TODO: add dummy bots so that they can train models
 
@@ -146,7 +145,7 @@ class Env:
             else:
                 self.world_surface.fill("purple")
 
-        # Implement frame skipping for training acceleration
+        # frame skipping for training acceleration
         skip_count = self.frame_skip if self.training_mode else 1
 
         # Track if any frame resulted in game over
