@@ -33,7 +33,7 @@ class ImprovedDQN(nn.Module):
         rays = state_dict['rays']
         relative_pos = state_dict.get('relative_pos', torch.zeros_like(location))
         time_features = state_dict.get('time_features', torch.zeros((location.shape[0], 2), device=location.device))
-        
+
         # Concatenate all inputs
         combined = torch.cat([location, status, rays, relative_pos, time_features], dim=1)
 
@@ -59,19 +59,19 @@ class MyBot:
         self.steps = 0
         self.use_double_dqn = True  # Enable Double DQN
         self.reset_epsilon = True
-        
+
         # Prioritized experience replay parameters
         self.alpha = 0.6  # Priority exponent
         self.beta = 0.4   # Initial importance sampling weight
         self.beta_increment = 0.001  # Beta increment per sampling
         self.epsilon_pri = 0.01  # Small constant to avoid zero priority
         self.max_priority = 1.0  # Initial max priority
-        
+
         # Curiosity parameters
         self.exploration_bonus = 0.1
         self.visited_positions = {}  # Track visited positions
         self.position_resolution = 50  # Grid resolution for position tracking
-        
+
         # Time tracking features
         self.time_since_last_shot = 0
         self.time_alive = 0
@@ -137,7 +137,7 @@ class MyBot:
                 ray_data.extend([0.0] * 6)
 
             state['rays'] = torch.tensor(ray_data[:30], dtype=torch.float32)
-            
+
             # Add relative position to opponent if available
             if 'closest_opponent' in info:
                 opponent_pos = info['closest_opponent']
@@ -146,20 +146,20 @@ class MyBot:
                 state['relative_pos'] = torch.tensor([rel_x, rel_y], dtype=torch.float32)
             else:
                 state['relative_pos'] = torch.tensor([0.0, 0.0], dtype=torch.float32)
-                
+
             # Add time-based features
             state['time_features'] = torch.tensor([
                 self.time_since_last_shot / 100.0,  # Normalize time since last shot
                 self.time_alive / 2400.0            # Normalize time alive by max episode length
             ], dtype=torch.float32)
-            
+
             # Update time tracking
             self.time_alive += 1
             if info.get('shot_fired', False):
                 self.time_since_last_shot = 0
             else:
                 self.time_since_last_shot += 1
-                
+
             return state
 
         except Exception as e:
@@ -228,12 +228,12 @@ class MyBot:
     def remember(self, reward, next_info, done):
         try:
             next_state = self.normalize_state(next_info)
-            
+
             # Calculate exploration bonus based on position novelty
             pos_x = int(next_state['location'][0].item() * self.position_resolution)
             pos_y = int(next_state['location'][1].item() * self.position_resolution)
             grid_pos = (pos_x, pos_y)
-            
+
             # Add exploration bonus for less visited areas
             exploration_bonus = 0
             if grid_pos in self.visited_positions:
@@ -243,17 +243,17 @@ class MyBot:
             else:
                 self.visited_positions[grid_pos] = 1
                 exploration_bonus = self.exploration_bonus
-                
+
             # Add exploration bonus to the reward
             reward += exploration_bonus
-            
+
             # Standard experience memory for backward compatibility
             self.memory.append((self.last_state, self.last_action, reward, next_state, done))
-            
+
             # Add to prioritized experience replay with max priority for new experiences
             self.priority_memory.append((self.last_state, self.last_action, reward, next_state, done))
             self.priority_probabilities.append(self.max_priority)
-            
+
             # Start training only when we have enough samples
             if len(self.memory) >= self.min_memory_size and not self.training_started:
                 print(f"Starting training with {len(self.memory)} samples in memory")
@@ -271,7 +271,7 @@ class MyBot:
                     print(f"Step {self.steps}, epsilon: {self.epsilon:.4f}")
 
             # Update target network periodically
-            if self.steps % self.update_target_freq == 0:
+            if self.steps > 0 and self.steps % self.update_target_freq == 0:
                 self.target_model.load_state_dict(self.model.state_dict())
                 print(f"Updated target network at step {self.steps}")
 
@@ -281,7 +281,7 @@ class MyBot:
 
         except Exception as e:
             print(f"Error in remember: {e}")
-            
+
     def prioritized_replay(self):
         """Prioritized experience replay implementation with Double DQN"""
         if len(self.priority_memory) < self.batch_size:
@@ -292,19 +292,19 @@ class MyBot:
             priorities = np.array(self.priority_probabilities)
             probs = priorities ** self.alpha
             probs /= probs.sum()
-            
+
             # Sample batch according to priorities
             indices = np.random.choice(len(self.priority_memory), self.batch_size, p=probs)
-            
+
             # Extract batch
             batch = [self.priority_memory[idx] for idx in indices]
-            
+
             # Calculate importance sampling weights
             self.beta = min(1.0, self.beta + self.beta_increment)  # Anneal beta
             weights = (len(self.priority_memory) * probs[indices]) ** (-self.beta)
             weights /= weights.max()  # Normalize
             weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
-            
+
             # Prepare batch data
             states = {
                 'location': torch.stack([t[0]['location'] for t in batch]).to(self.device),
@@ -339,17 +339,17 @@ class MyBot:
                 else:
                     # Regular DQN: both select and evaluate using target network
                     next_q_values = self.target_model(next_states).max(1)[0]
-                
+
                 target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
 
             # Compute TD errors for updating priorities
             td_errors = torch.abs(current_q_values.squeeze() - target_q_values).detach().cpu().numpy()
-            
+
             # Update priorities
             for idx, error in zip(indices, td_errors):
                 self.priority_probabilities[idx] = error + self.epsilon_pri
                 self.max_priority = max(self.max_priority, error + self.epsilon_pri)
-            
+
             # Compute weighted loss
             loss = (weights * F.smooth_l1_loss(current_q_values.squeeze(), target_q_values, reduction='none')).mean()
 
@@ -408,7 +408,7 @@ class MyBot:
                 else:
                     # Regular DQN: both select and evaluate using target network
                     next_q_values = self.target_model(next_states).max(1)[0]
-                
+
                 target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
 
             # Compute loss and optimize
@@ -472,21 +472,24 @@ class MyBot:
             # Use specified device or default to self.device
             if map_location is None:
                 map_location = self.device
-                
+
             checkpoint = torch.load(filepath, map_location=map_location)
             self.model.load_state_dict(checkpoint['model_state_dict'])
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             if not self.reset_epsilon:
                 self.epsilon = checkpoint['epsilon']
             self.steps = checkpoint['steps']
-            
+
             # Ensure model is on the correct device
             self.device = torch.device(map_location) if isinstance(map_location, str) else map_location
             self.model = self.model.to(self.device)
+
+            # Update target network with loaded model weights
             self.target_model.load_state_dict(self.model.state_dict())
             self.target_model = self.target_model.to(self.device)
-            
+
             print(f"Model loaded successfully from {filepath} to {self.device}")
+            print(f"Target network updated during model loading at step {self.steps}")
         except Exception as e:
             print(f"Error loading model: {e}")
             print("Starting with a fresh model")
@@ -494,3 +497,6 @@ class MyBot:
             self.model = ImprovedDQN(input_dim=38, output_dim=self.action_size).to(self.device)
             self.target_model = ImprovedDQN(input_dim=38, output_dim=self.action_size).to(self.device)
             self.target_model.load_state_dict(self.model.state_dict())
+            # Reset steps to 0 when starting with a fresh model
+            self.steps = 0
+            print(f"Target network initialized with fresh model at step {self.steps}")
