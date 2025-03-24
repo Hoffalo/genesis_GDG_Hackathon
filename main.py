@@ -86,6 +86,8 @@ def train_episode(epoch, config, curriculum_stages, world_bounds, display_width,
                 bot.epsilon_decay = config["hyperparameters"]["epsilon_decay"]
                 bot.optimizer = torch.optim.Adam(bot.model.parameters(), lr=bot.learning_rate)
 
+                print("Loaded hyperparameters")
+
                 # Load shared model state with error handling
                 if shared_models[idx] is not None:
                     try:
@@ -1031,7 +1033,7 @@ def create_training_plots(metrics, run_dir, epoch):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train reinforcement learning bots')
-    parser.add_argument('--num_environments', type=int, default=8,
+    parser.add_argument('--num_environments', type=int, default=4,
                         help='Number of parallel environments to use. Set to 1 to disable parallelization.')
     parser.add_argument('--device', type=str, default=None,
                         help='Device to use (cuda, cpu, mps). If not specified, best available device will be used.')

@@ -345,6 +345,7 @@ class Env:
         3. Strategic movement and positioning
         4. Eliminating opponents
         5. Exploration of new areas
+        6. Winning the game (huge reward)
         """
         players_info = info_dictionary.get("players_info", {})
         bot_info = players_info.get(bot_username)
@@ -388,16 +389,16 @@ class Env:
             # Reward for discovering a new area
             self.visited_areas[bot_username].add(grid_pos)
             # Scale reward based on number of areas discovered (diminishing returns)
-            discovery_reward = min(1.0, 10.0 / len(self.visited_areas[bot_username]))
+            discovery_reward = min(0.5, 6.0 / len(self.visited_areas[bot_username]))
             reward += discovery_reward
         else:
             # Small reward for movement even if not discovering new areas
-            reward += min(distance_moved * 0.01, 0.1)  # Reduced reward for revisiting
+            reward += min(distance_moved * 0.0001, 0.1)  # Reduced reward for revisiting
 
         # 2. Damage reward - encourage accurate shooting
         delta_damage = damage_dealt - self.last_damage[bot_username]
         if delta_damage > 0:
-            reward += delta_damage * 2.0  # Reduced from 5.0 for more balanced rewards
+            reward += delta_damage * 5.0
 
         # 3. Kill reward - significant but not overwhelming
         delta_kills = kills - self.last_kills[bot_username]
@@ -415,11 +416,18 @@ class Env:
 
         # 6. Survival reward - encourage staying alive
         if alive:
-            reward += 0.1  # Small constant reward for staying alive
+            reward += 0.00001  # Small constant reward for staying alive
 
         # 7. Health bonus - encourage maintaining high health
         if health > 80:
-            reward += 0.05  # Small bonus for maintaining high health
+            reward += 0.000005  # Small bonus for maintaining high health
+
+        # 8. Winning reward - huge reward for winning the game
+        game_info = info_dictionary.get("game_info", {})
+        alive_players_count = game_info.get("alive_players", 0)
+        if alive_players_count == 1 and alive:
+            # This bot is the last one standing - it's the winner!
+            reward += 100.0  # Huge reward for winning
 
         # Update tracking values for next step
         self.last_positions[bot_username] = current_position
