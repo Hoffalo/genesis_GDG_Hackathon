@@ -15,7 +15,7 @@ class Env:
 
         self.training_mode = training
 
-            # ONLY FOR DISPLAY
+        # ONLY FOR DISPLAY
         # Create display window with desired display dimensions
         self.display_width = display_width
         self.display_height = display_height
@@ -91,14 +91,11 @@ class Env:
             if not self.use_advanced_UI:
                 self.screen.fill("green")
                 pygame.display.flip()
-                # Use clock.tick() instead of time.sleep() for a 1-second delay
-                # This will work correctly with different tick rates
                 self.clock.tick(1)  # 1 frame per second for 1 second = 1 frame
             else:
                 self.advanced_UI.display_reset_screen()
 
         else:
-            # In training mode, you might simply clear the screen without delay.
             self.screen.fill("green")
 
         self.last_positions = {}
@@ -106,13 +103,6 @@ class Env:
         self.last_kills = {}
         self.last_health = {}
         self.visited_areas = {}
-
-        """
-        self.visited_areas.clear()
-        self.last_positions.clear()
-        self.last_health.clear()
-        self.last_kills.clear()
-        self.last_damage.clear()"""
 
         self.steps = 0
 
