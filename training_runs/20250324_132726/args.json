@@ -1,5 +1,0 @@
-{
-    "num_environments": 4,
-    "device": "mps",
-    "num_epochs": 1000
-}

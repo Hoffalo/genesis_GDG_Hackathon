@@ -149,7 +149,7 @@ class Character:
             # Convert delay seconds to ticks (assuming 60 ticks per second)
             delay_ticks = int(self.delay * 60)
             if self.last_shoot_tick is not None and self.current_tick - self.last_shoot_tick < delay_ticks:
-                print("still on delay", self.current_tick - self.last_shoot_tick)
+                #print("still on delay", self.current_tick - self.last_shoot_tick)
                 return False
 
             ray  = self.create_rays(num_rays=1, max_angle_view=1, distance=5000, damage=self.damage)[0]
