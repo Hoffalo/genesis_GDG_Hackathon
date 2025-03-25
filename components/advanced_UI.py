@@ -16,10 +16,10 @@ class GameMusic:
 
         # Define music tracks
         self.tracks = {
-            'menu': os.path.join('components', 'music', 'Duran Duran - INVISIBLE.mp3'),
-            'battle': os.path.join('components', 'music', 'Duran Duran - INVISIBLE.mp3'),
-            'victory': os.path.join('components', 'music', 'Duran Duran - INVISIBLE.mp3'),
-            'game_over': os.path.join('components', 'music', 'Duran Duran - INVISIBLE.mp3')
+            'menu': os.path.join('', 'music', 'Duran Duran - INVISIBLE.mp3'),
+            'battle': os.path.join('', 'music', 'Duran Duran - INVISIBLE.mp3'),
+            'victory': os.path.join('', 'music', 'Duran Duran - INVISIBLE.mp3'),
+            'game_over': os.path.join('', 'music', 'Duran Duran - INVISIBLE.mp3')
         }
 
         self.loaded_tracks = {}
