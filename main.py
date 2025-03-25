@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 import torch
 import matplotlib.pyplot as plt
+from pygame.examples.music_drop_fade import starting_pos
 
 from Environment import Env
 from bots.example_bot import MyBot
@@ -117,10 +118,10 @@ def main():
 
     # --- setup players and bots ---
     players = [
-        Character((world_bounds[2] - 100, world_bounds[3] - 100),
-                  env.world_surface, boundaries=world_bounds, username="Ninja"),
-        Character((world_bounds[0] + 10, world_bounds[1] + 10),
-                  env.world_surface, boundaries=world_bounds, username="Faze Jarvis"),
+        Character(starting_pos=(world_bounds[2] - 100, world_bounds[3] - 100),
+                  screen=env.world_surface, boundaries=world_bounds, username="Ninja"),
+        Character(starting_pos=(world_bounds[0] + 10, world_bounds[1] + 10),
+                  screen=env.world_surface, boundaries=world_bounds, username="Faze Jarvis"),
     ]
 
     bots = []
