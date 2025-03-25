@@ -164,7 +164,7 @@ class Character:
                 pygame.draw.line(self.screen, color, ray[0][0], ray[0][1], 5)
             self.last_shoot_tick = self.current_tick
 
-            #self.current_ammo -= 1
+            self.current_ammo -= 1
             if self.current_ammo <= 0 and self.reload_start_tick is None:
                 self.is_reloading = True
                 print("is reloading", self.current_ammo)
