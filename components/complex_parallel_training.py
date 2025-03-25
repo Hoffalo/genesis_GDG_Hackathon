@@ -368,7 +368,7 @@ def main(num_environments=4, device=None, num_epochs=1000, training=True):
     run_dir = f"training_runs/{timestamp}"
 
     # Make sure parent directory exists
-    os.makedirs("training_runs", exist_ok=True)
+    os.makedirs("../training_runs", exist_ok=True)
     os.makedirs(run_dir, exist_ok=True)
     os.makedirs(f"{run_dir}/models", exist_ok=True)
     os.makedirs(f"{run_dir}/plots", exist_ok=True)

@@ -94,7 +94,7 @@ def main():
     with open(f"{run_dir}/config.json", "w") as f:
         json.dump(config, f, indent=4)
 
-    # --- changes number of obstacles and the max duration of each epoch ---
+    # --- changes number of obstacles ---
     curriculum_stages = [
         {"n_obstacles": 10, "duration": 100},
         {"n_obstacles": 15, "duration": 200},
