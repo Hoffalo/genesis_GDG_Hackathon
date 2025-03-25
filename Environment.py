@@ -4,8 +4,6 @@ import pygame
 from components.advanced_UI import game_UI
 from components.world_gen import spawn_objects
 
-# TODO: add controls for multiple players
-# TODO: add dummy bots so that they can train models
 
 class Env:
     def __init__(self, training=False, use_game_ui=True, world_width=1280, world_height=1280, display_width=640,
