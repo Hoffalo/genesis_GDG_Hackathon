@@ -84,6 +84,24 @@ class Env:
     def get_world_bounds(self):
         return (0, 0, self.world_width, self.world_height)
 
+    def find_closest_opponent(self, player):
+        """Find the position of the closest opponent for a given player"""
+        closest_dist = float('inf')
+        closest_pos = None
+
+        for other in self.players:
+            if other != player and other.alive:
+                dist = math.dist(player.rect.center, other.rect.center)
+                if dist < closest_dist:
+                    closest_dist = dist
+                    closest_pos = other.rect.center
+
+        # return default position if no opponents found
+        if closest_pos is None:
+            return player.rect.center
+
+        return closest_pos
+
     def reset(self, randomize_objects=False, randomize_players=False):
         self.running = True
         if not self.training_mode:
@@ -137,10 +155,10 @@ class Env:
             player.objects = self.obstacles
 
     def step(self, debugging=False):
-        # Only render if not in training mode
+        # only render if not in training mode
         if not self.training_mode:
             if self.use_advanced_UI:
-                # Use the background from game_UI
+                # use the background from game_UI
                 self.world_surface.blit(self.advanced_UI.background, (0, 0))
             else:
                 self.world_surface.fill("purple")
@@ -148,16 +166,16 @@ class Env:
         # frame skipping for training acceleration
         skip_count = self.frame_skip if self.training_mode else 1
 
-        # Track if any frame resulted in game over
+        # track if any frame resulted in game over
         game_over = False
         final_info = None
 
-        # Get actions once and reuse them for all skipped frames
+        # get actions once and reuse them for all skipped frames
         player_actions = {}
         if self.training_mode:
             for player in self.players:
                 if player.alive:
-                    # Update player info with closest opponent data before action
+                    # update player info with closest opponent data before action
                     player_info = player.get_info()
                     player_info['closest_opponent'] = self.find_closest_opponent(player)
                     player_actions[player.username] = player.related_bot.act(player_info)
@@ -272,26 +290,8 @@ class Env:
             # return the final state from the last frame
             return False, final_info
 
-    def find_closest_opponent(self, player):
-        """Find the position of the closest opponent for a given player"""
-        closest_dist = float('inf')
-        closest_pos = None
-
-        for other in self.players:
-            if other != player and other.alive:
-                dist = math.dist(player.rect.center, other.rect.center)
-                if dist < closest_dist:
-                    closest_dist = dist
-                    closest_pos = other.rect.center
-
-        # return default position if no opponents found
-        if closest_pos is None:
-            return player.rect.center
-
-        return closest_pos
-
     """TO MODIFY"""
-    def calculate_reward_empty(self, info_dictionary, bot_username):
+    def calculate_reward(self, info_dictionary, bot_username):
         """THIS FUNCTION IS USED TO CALCULATE THE REWARD FOR A BOT"""
         """NEEDS TO BE WRITTEN BY YOU TO FINE TUNE YOURS"""
 
@@ -320,104 +320,5 @@ class Env:
         reward = 0
         # add your reward calculation here
 
-        return reward
-
-    def calculate_reward(self, info_dictionary, bot_username):
-        """
-        Balanced reward function that encourages:
-        1. Survival and health maintenance
-        2. Accurate shooting and damage dealing
-        3. Strategic movement and positioning
-        4. Eliminating opponents
-        5. Exploration of new areas
-        6. Winning the game (huge reward)
-        """
-        players_info = info_dictionary.get("players_info", {})
-        bot_info = players_info.get(bot_username)
-        if bot_info is None:
-            print(f"Bot {bot_username} not found in info dictionary.")
-            return 0
-
-        # Extract current values
-        current_position = bot_info.get("location", [0, 0])
-        damage_dealt = bot_info.get("damage_dealt", 0)
-        kills = bot_info.get("kills", 0)
-        alive = bot_info.get("alive", False)
-        health = bot_info.get("health", 100)
-        shot_fired = bot_info.get("shot_fired", False)
-
-        # Initialize tracking dictionaries if necessary
-        if bot_username not in self.last_positions:
-            self.last_positions[bot_username] = current_position
-        if bot_username not in self.last_damage:
-            self.last_damage[bot_username] = damage_dealt
-        if bot_username not in self.last_kills:
-            self.last_kills[bot_username] = kills
-        if bot_username not in self.last_health:
-            self.last_health[bot_username] = health
-        if bot_username not in self.visited_areas:
-            self.visited_areas[bot_username] = set()
-
-        reward = 0
-
-        # 1. Movement reward - encourage exploration of new areas
-        distance_moved = math.dist(current_position, self.last_positions[bot_username])
-
-        # Discretize position to a grid cell (using a grid size of 50x50)
-        grid_size = 50
-        grid_x = int(current_position[0] / grid_size)
-        grid_y = int(current_position[1] / grid_size)
-        grid_pos = (grid_x, grid_y)
-
-        # Check if this grid cell has been visited before
-        if grid_pos not in self.visited_areas[bot_username]:
-            # Reward for discovering a new area
-            self.visited_areas[bot_username].add(grid_pos)
-            # Scale reward based on number of areas discovered (diminishing returns)
-            discovery_reward = min(0.5, 6.0 / len(self.visited_areas[bot_username]))
-            reward += discovery_reward
-        else:
-            # Small reward for movement even if not discovering new areas
-            reward += min(distance_moved * 0.0001, 0.1)  # Reduced reward for revisiting
-
-        # 2. Damage reward - encourage accurate shooting
-        delta_damage = damage_dealt - self.last_damage[bot_username]
-        if delta_damage > 0:
-            reward += delta_damage * 5.0
-
-        # 3. Kill reward - significant but not overwhelming
-        delta_kills = kills - self.last_kills[bot_username]
-        if delta_kills > 0:
-            reward += delta_kills * 20.0  # Reduced from 50.0 for more balanced rewards
-
-        # 4. Shot penalty - encourage accuracy without being too punishing
-        if shot_fired and delta_damage <= 0:
-            reward -= 0.1  # Reduced penalty for missing shots
-
-        # 5. Damage taken penalty - encourage defensive play
-        delta_health = self.last_health[bot_username] - health
-        if delta_health > 0:
-            reward -= delta_health * 0.2  # Reduced penalty for taking damage
-
-        # 6. Survival reward - encourage staying alive
-        if alive:
-            reward += 0.00001  # Small constant reward for staying alive
-
-        # 7. Health bonus - encourage maintaining high health
-        if health > 80:
-            reward += 0.000005  # Small bonus for maintaining high health
-
-        # 8. Winning reward - huge reward for winning the game
-        game_info = info_dictionary.get("game_info", {})
-        alive_players_count = game_info.get("alive_players", 0)
-        if alive_players_count == 1 and alive:
-            # This bot is the last one standing - it's the winner!
-            reward += 100.0  # Huge reward for winning
-
-        # Update tracking values for next step
-        self.last_positions[bot_username] = current_position
         self.last_damage[bot_username] = damage_dealt
-        self.last_kills[bot_username] = kills
-        self.last_health[bot_username] = health
-
         return reward
