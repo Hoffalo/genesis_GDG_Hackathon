@@ -1,8 +1,6 @@
 import pygame
 from components.utils import find_hit_point_on_rectangle, distance_between_points
 
-# TODO: remember to re-enable the ammo, uncomment line that removes 1 ammo
-
 class Character:
     def __init__(self, starting_pos, screen, speed=5, boundaries=None, objects=None, username=None):
         self.rotation = 0
