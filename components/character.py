@@ -23,7 +23,7 @@ class Character:
         self.delay = 0.3 #0.3 #(between shoots), a lot of time so it is longer but more intense
         self.max_ammo = 30
         self.current_ammo = self.max_ammo
-        self.time_to_reload = 3
+        self.time_to_reload = 2
         self.alive = True
         self.is_reloading = False
         self.rays = []
