@@ -1,7 +1,7 @@
 import math
 import os
 import pygame
-from advanced_UI import game_UI
+from components.advanced_UI import game_UI
 from components.world_gen import spawn_objects
 
 # TODO: add controls for multiple players

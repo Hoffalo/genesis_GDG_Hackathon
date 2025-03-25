@@ -1,18 +1,17 @@
 import pygame
 import matplotlib.pyplot as plt
-import numpy as np
 import os
 import json
 import argparse
 from datetime import datetime
 import torch
-from multiprocessing import Pool, cpu_count, Manager, Lock
+from multiprocessing import Pool, cpu_count, Manager
 from functools import partial
 import copy
 import time  
 
 from Environment import Env
-from components.my_bot import MyBot
+from bots.my_bot import MyBot
 from components.character import Character
 
 # from my_bot import MyBot  # You will add your MyBot class code in a separate file
