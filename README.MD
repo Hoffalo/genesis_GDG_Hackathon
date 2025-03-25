@@ -1,5 +1,9 @@
 # AI Bot Development Hackathon
 
+## Colab Notebook
+You can view the example notebook here:  
+[Colab Notebook - My Project](https://colab.research.google.com/drive/1HWwft1d0rQaX3zbsRZlCyHAYo5P4Naid)
+
 ## Project Overview
 This hackathon focuses on developing AI bots that can play a 2D game using reinforcement learning. Participants will create their own bot implementations and reward functions to compete in a dynamic game environment.
 
