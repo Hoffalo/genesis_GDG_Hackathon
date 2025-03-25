@@ -11,11 +11,10 @@ import math
 class ImprovedDQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(ImprovedDQN, self).__init__()
-        # Simplified architecture for better learning
         self.input_net = nn.Sequential(
-            nn.Linear(input_dim, 128),  # Reduced first layer size
+            nn.Linear(input_dim, 128),
             nn.ReLU(),
-            nn.Linear(128, 64),  # Reduced hidden layer size
+            nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, output_dim)
         )
@@ -27,17 +26,17 @@ class ImprovedDQN(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, state_dict):
-        # Combine all inputs into a single tensor
+        # combine all inputs into a single tensor
         location = state_dict['location']
         status = state_dict['status']
         rays = state_dict['rays']
         relative_pos = state_dict.get('relative_pos', torch.zeros_like(location))
         time_features = state_dict.get('time_features', torch.zeros((location.shape[0], 2), device=location.device))
 
-        # Concatenate all inputs
+        # concatenate all inputs
         combined = torch.cat([location, status, rays, relative_pos, time_features], dim=1)
 
-        # Process through the network
+        # process through the network
         return self.input_net(combined)
 
 
@@ -489,70 +488,3 @@ class MyBot:
         self.model = self.model.to(self.device)
         self.target_model.load_state_dict(self.model.state_dict())
         self.target_model = self.target_model.to(self.device)
-
-    def save(self, filepath):
-        """Saves the model weights and training state."""
-        try:
-            torch.save({
-                'model_state_dict': self.model.state_dict(),
-                'optimizer_state_dict': self.optimizer.state_dict(),
-                'epsilon': self.epsilon,
-                'steps': self.steps,
-                'hyperparameters': self.get_hyperparameters(),
-            }, filepath)
-            print(f"Model saved successfully to {filepath}")
-        except Exception as e:
-            print(f"Error saving model: {e}")
-
-    def load(self, filepath, map_location=None):
-        """Loads model weights from the specified file."""
-        try:
-            # Use specified device or default to self.device
-            if map_location is None:
-                map_location = self.device
-
-            # Always load checkpoint to CPU first to avoid MPS-specific issues
-            checkpoint = torch.load(filepath, map_location='cpu')
-            print("keys", checkpoint.keys())
-
-            # Load model state dict
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-
-            # Handle optimizer state dict carefully
-            # Some optimizer states have CPU-specific features that aren't compatible with MPS
-            try:
-                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                # Move optimizer state to the correct device if needed
-                if map_location != 'cpu':
-                    for state in self.optimizer.state.values():
-                        for k, v in state.items():
-                            if isinstance(v, torch.Tensor):
-                                state[k] = v.to(map_location)
-            except Exception as e:
-                print(f"Warning: Could not load optimizer state: {e}")
-                print("Continuing with fresh optimizer but keeping model weights")
-
-            if not self.reset_epsilon:
-                self.epsilon = checkpoint['epsilon']
-            self.steps = checkpoint['steps']
-
-            # Ensure model is on the correct device
-            self.device = torch.device(map_location) if isinstance(map_location, str) else map_location
-            self.model = self.model.to(self.device)
-
-            # Update target network with loaded model weights
-            self.target_model.load_state_dict(self.model.state_dict())
-            self.target_model = self.target_model.to(self.device)
-
-            print(f"Model loaded successfully from {filepath} to {self.device}")
-            print(f"Target network updated during model loading at step {self.steps}")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            print("Starting with a fresh model")
-            # Initialize a fresh model if loading fails
-            self.model = ImprovedDQN(input_dim=38, output_dim=self.action_size).to(self.device)
-            self.target_model = ImprovedDQN(input_dim=38, output_dim=self.action_size).to(self.device)
-            self.target_model.load_state_dict(self.model.state_dict())
-            # Reset steps to 0 when starting with a fresh model
-            self.steps = 0
-            print(f"Target network initialized with fresh model at step {self.steps}")

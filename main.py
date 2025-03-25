@@ -6,7 +6,7 @@ import torch
 import matplotlib.pyplot as plt
 
 from Environment import Env
-from bots.my_bot import MyBot
+from bots.example_bot import MyBot
 from components.character import Character
 
 def train_single_episode(env, players, bots, config, current_stage):
