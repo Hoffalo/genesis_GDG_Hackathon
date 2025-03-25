@@ -15,8 +15,6 @@ from Environment import Env
 from components.my_bot import MyBot
 from components.character import Character
 
-# Import your environment, characters, and MyBot here
-# from my_environment_module import Env, Character
 # from my_bot import MyBot  # You will add your MyBot class code in a separate file
 
 def train_episode(epoch, config, curriculum_stages, world_bounds, display_width, display_height, shared_models, shared_history, shared_epsilon, training=True):
