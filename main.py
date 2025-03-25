@@ -1,10 +1,8 @@
-import pygame
 import os
 import json
 from datetime import datetime
 import torch
 import matplotlib.pyplot as plt
-from pygame.examples.music_drop_fade import starting_pos
 
 from Environment import Env
 from bots.example_bot import MyBot
