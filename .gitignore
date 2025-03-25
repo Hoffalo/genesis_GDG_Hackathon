@@ -17,3 +17,6 @@ training_runs/
 .DS_Store
 .idea/
 .vscode/
+
+bot_model_0.pth
+bot_model_1.pth
