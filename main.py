@@ -9,7 +9,6 @@ from Environment import Env
 from bots.my_bot import MyBot
 from components.character import Character
 
-# method that trains a single episode in one environment
 def train_single_episode(env, players, bots, config, current_stage):
     """Trains a single episode in one environment"""
     env.reset(randomize_objects=True)
@@ -26,8 +25,8 @@ def train_single_episode(env, players, bots, config, current_stage):
         "epsilon": {player.username: 0 for player in players}
     }
 
-    if hasattr(env, 'last_damage_tracker'):
-        env.last_damage_tracker = {player.username: 0 for player in players}
+    # Initialize last_damage_tracker unconditionally
+    env.last_damage_tracker = {player.username: 0 for player in players}
 
     while env.steps < config["tick_limit"]:
         finished, info = env.step(debugging=False)
@@ -62,6 +61,13 @@ def train_single_episode(env, players, bots, config, current_stage):
 
 
 def main():
+    "--- KEEP THESE VALUES UNCHANGED ---"
+    world_width = 1280
+    world_height = 1280
+    display_width = 800
+    display_height = 800
+    "---"
+
     # --- setup output directory using time ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = f"training_runs/{timestamp}"
@@ -84,7 +90,7 @@ def main():
         }
     }
 
-    # save config to file for debugging purposes
+    # --- save config to file for debugging purposes ---
     with open(f"{run_dir}/config.json", "w") as f:
         json.dump(config, f, indent=4)
 
@@ -95,12 +101,7 @@ def main():
         {"n_obstacles": 20, "duration": 300}
     ]
 
-    world_width = 1280
-    world_height = 1280
-    display_width = 800
-    display_height = 800
-
-    # --- Create environment ---
+    # --- create environment ---
     env = Env(
         training=True,
         use_game_ui=False,
@@ -114,10 +115,12 @@ def main():
 
     world_bounds = env.get_world_bounds()
 
-    # --- Setup players and bots ---
+    # --- setup players and bots ---
     players = [
-        Character((world_bounds[2] - 100, world_bounds[3] - 100), env.world_surface, world_bounds, "Ninja"),
-        Character((world_bounds[0] + 10, world_bounds[1] + 10), env.world_surface, world_bounds, "Faze Jarvis")
+        Character((world_bounds[2] - 100, world_bounds[3] - 100),
+                  env.world_surface, boundaries=world_bounds, username="Ninja"),
+        Character((world_bounds[0] + 10, world_bounds[1] + 10),
+                  env.world_surface, boundaries=world_bounds, username="Faze Jarvis"),
     ]
 
     bots = []
@@ -131,16 +134,16 @@ def main():
         bot.optimizer = torch.optim.Adam(bot.model.parameters(), lr=bot.learning_rate)
         bots.append(bot)
 
-    # --- Link players and bots to environment ---
+    # --- link players and bots to environment ---
     env.set_players_bots_objects(players, bots)
 
     all_rewards = {player.username: [] for player in players}
 
-    # --- Training Loop ---
+    # --- training Loop ---
     for epoch in range(config["num_epochs"]):
         print(f"Epoch {epoch + 1}/{config['num_epochs']}")
 
-        # Determine current curriculum stage
+        # determine current curriculum stage
         total_epochs = 0
         for i, stage in enumerate(curriculum_stages):
             total_epochs += stage["duration"]
@@ -163,7 +166,7 @@ def main():
                   f"Damage: {metrics['damage_dealt'][username]}, "
                   f"Epsilon: {metrics['epsilon'][username]:.4f}")
 
-    # --- Plot training rewards ---
+    # --- plot training rewards ---
     for username, rewards in all_rewards.items():
         plt.plot(rewards, label=username)
     plt.title("Rewards per Episode")
