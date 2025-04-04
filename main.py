@@ -7,6 +7,7 @@ import pygame
 from Environment import Env
 from bots.example_bot import MyBot
 from components.character import Character
+from bots.aggressive_bot import AggressiveBot
 
 def run_game(env, players, bots):
     """Runs the game in display mode for human viewing"""
@@ -166,7 +167,7 @@ def main():
 
     bots = []
     for _ in players:
-        bot = MyBot(action_size=config["action_size"])
+        bot = AggressiveBot(action_size=config["action_size"])
         bot.use_double_dqn = config["hyperparameters"]["double_dqn"]
         bot.learning_rate = config["hyperparameters"]["learning_rate"]
         bot.batch_size = config["hyperparameters"]["batch_size"]

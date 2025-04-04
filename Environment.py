@@ -6,7 +6,7 @@ from components.world_gen import spawn_objects
 
 
 class Env:
-    def __init__(self, training=False, use_game_ui=True, world_width=1280, world_height=1280, display_width=640,
+    def __init__(self, training=True, use_game_ui=True, world_width=1280, world_height=1280, display_width=640,
                  display_height=640, n_of_obstacles=10, frame_skip=4):
         pygame.init()
 
@@ -319,4 +319,24 @@ class Env:
         # add your reward calculation here
 
         self.last_damage[bot_username] = damage_dealt
+        
+        info = info_dictionary.get("players_info", {}).get(bot_username, {})
+        reward = 0
+
+        # Reward aggression
+        reward += info.get("kills", 0) * 10
+        reward += info.get("damage_dealt", 0) * 0.5
+        reward += info.get("shot_fired", False) * 0.2
+
+        # Penalize cowardice
+        dist_to_enemy = math.dist(info.get("location", [0, 0]), info.get("closest_opponent", [0, 0]))
+        reward -= max(0, dist_to_enemy - 200) * 0.001  # Penalize being far away
+
+        # Encourage moving (avoid camping)
+        reward += info.get("meters_moved", 0) * 0.05
+
+        # Penalize wasting shots
+        if info.get("shot_fired", False) and info.get("current_ammo", 0) == 0:
+            reward -= 0.5
+
         return reward
