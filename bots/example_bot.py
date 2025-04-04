@@ -227,6 +227,10 @@ class MyBot:
     def remember(self, reward, next_info, done):
         try:
             next_state = self.normalize_state(next_info)
+            
+            if self.last_state is None or next_state is None:
+                print("Skipping bad experience (state was None)")
+                return
 
             # Calculate exploration bonus based on position novelty
             pos_x = int(next_state['location'][0].item() * self.position_resolution)

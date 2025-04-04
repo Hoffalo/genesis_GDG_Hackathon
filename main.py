@@ -107,7 +107,7 @@ def main():
     display_width = 800
     display_height = 800
     "---"
-
+    
     # --- setup output directory using time ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = f"training_runs/{timestamp}"
@@ -164,6 +164,8 @@ def main():
         Character(starting_pos=(world_bounds[0] + 10, world_bounds[1] + 10),
                   screen=env.world_surface, boundaries=world_bounds, username="Faze Jarvis"),
     ]
+    
+    win_counts = {player.username: 0 for player in players}
 
     bots = []
     for _ in players:
@@ -198,6 +200,13 @@ def main():
             env.n_of_obstacles = curriculum_stages[current_stage]["n_obstacles"]
 
             metrics = train_single_episode(env, players, bots, config, current_stage)
+            
+            # Get winner if only one survived
+            alive_players = [player for player in players if metrics["survival_time"][player.username] > 0]
+            if len(alive_players) == 1:
+                winner = alive_players[0].username
+                win_counts[winner] += 1
+
 
             for idx, bot in enumerate(bots):
                 torch.save(bot.model.state_dict(), f"{run_dir}/models/bot_model_{idx}_epoch_{epoch + 1}.pth")
@@ -209,6 +218,10 @@ def main():
                       f"Kills: {metrics['kills'][username]}, "
                       f"Damage: {metrics['damage_dealt'][username]}, "
                       f"Epsilon: {metrics['epsilon'][username]:.4f}")
+                
+        print("\n=== FINAL WIN COUNTS ===")
+        for username, count in win_counts.items():
+            print(f"{username}: {count} wins")
 
         # --- plot training rewards ---
         for username, rewards in all_rewards.items():

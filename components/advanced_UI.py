@@ -330,6 +330,15 @@ class game_UI:
         # Draw obstacles
         for obstacle in obstacles:
             obstacle.draw(self.screen)
+            
+        # Draw the player sprite
+        pygame.draw.circle(screen, (0, 255, 0), self.rect.center, 15)
+
+        # Draw the bot’s name above them
+        font = pygame.font.Font(None, 24)
+        name_surface = font.render(self.username, True, (255, 255, 255))
+        name_rect = name_surface.get_rect(center=(self.rect.centerx, self.rect.centery - 20))
+        screen.blit(name_surface, name_rect)
 
         # Draw players
         for player in players:
