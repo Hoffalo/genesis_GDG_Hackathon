@@ -12,11 +12,39 @@ class AggressiveBot(MyBot):
         self.epsilon_min = 0.01
         self.exploration_bonus = 0.05  # Less curiosity, more focus
         self.attack_distance_threshold = 0.3  # ~384 pixels in 1280x1280 world
+        self.last_health = None
+        self.last_damage_direction = None
 
+    
     def act(self, info):
         try:
             state = self.normalize_state(info)
+            
+            # Step 1: detect damage
+            current_health = info.get("health", 100)
+            damage_taken = 0
+            if self.last_health is not None:
+                damage_taken = self.last_health - current_health
 
+            # Step 2: check if bot is under attack
+            being_attacked = damage_taken > 0
+
+            # Step 3: figure out direction to potential attacker using rays
+            if being_attacked:
+                for ray in info.get("rays", []):
+                    if ray[2] == "player":
+                        start_pos = ray[0][0]
+                        end_pos = ray[0][1]
+                        direction_vector = (end_pos[0] - start_pos[0], end_pos[1] - start_pos[1])
+
+                        # Store direction of incoming damage
+                        self.last_damage_direction = direction_vector
+                        break  # just take the first valid one
+
+            # Save current health for next frame
+            self.last_health = current_health
+
+            
             # Aggression heuristic:
             if 'closest_opponent' in info:
                 opp_x, opp_y = info['closest_opponent']
@@ -58,6 +86,18 @@ class AggressiveBot(MyBot):
             # Force shoot if enemy close and we have ammo
             if dist_to_opponent < 0.25 and info.get("current_ammo", 0) > 0:
                 action_dict["shoot"] = True
+                
+            if being_attacked and self.last_damage_direction is not None:
+                # Simple logic: rotate and shoot in that direction
+                rotate_angle = self._vector_to_angle(self.last_damage_direction)
+                return {
+                    "forward": False,
+                    "right": False,
+                    "left": False,
+                    "down": False,
+                    "rotate": rotate_angle,
+                    "shoot": True
+                }
 
             return action_dict
 
