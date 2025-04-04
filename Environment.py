@@ -289,54 +289,57 @@ class Env:
             return False, final_info
 
     """TO MODIFY"""
+    
     def calculate_reward(self, info_dictionary, bot_username):
-        """THIS FUNCTION IS USED TO CALCULATE THE REWARD FOR A BOT"""
-        """NEEDS TO BE WRITTEN BY YOU TO FINE TUNE YOURS"""
-
-        # retrieve the players' information from the dictionary
         players_info = info_dictionary.get("players_info", {})
-        bot_info = players_info.get(bot_username)
+        bot_info = players_info.get(bot_username, {})
 
-        # if the bot is not found, return a default reward of 0
-        if bot_info is None:
-            print("Bot not found in the dictionary")
+        if not bot_info:
             return 0
 
-        # extract variables from the bot's info
-        location = bot_info.get("location", [0, 0])
-        rotation = bot_info.get("rotation", 0)
-        rays = bot_info.get("rays", [])
-        current_ammo = bot_info.get("current_ammo", 0)
-        alive = bot_info.get("alive", False)
+        reward = 0
+
+        # === 1. Kills (high reward) ===
         kills = bot_info.get("kills", 0)
-        damage_dealt = bot_info.get("damage_dealt", 0)
-        meters_moved = bot_info.get("meters_moved", 0)
-        total_rotation = bot_info.get("total_rotation", 0)
-        health = bot_info.get("health", 0)
+        previous_kills = self.last_kills.get(bot_username, 0)
+        kills_gained = kills - previous_kills
+        reward += 20 * kills_gained
+        self.last_kills[bot_username] = kills
 
-        # calculate reward:
-        reward = 0
-        # add your reward calculation here
+        # === 2. Damage ===
+        current_damage = bot_info.get("damage_dealt", 0)
+        previous_damage = self.last_damage.get(bot_username, 0)
+        delta_damage = current_damage - previous_damage
+        reward += 0.5 * max(0, delta_damage)
+        self.last_damage[bot_username] = current_damage
 
-        self.last_damage[bot_username] = damage_dealt
-        
-        info = info_dictionary.get("players_info", {}).get(bot_username, {})
-        reward = 0
+        # === 3. Movement reward ===
+        movement = bot_info.get("meters_moved", 0)
+        reward += 0.1 * movement  # boost movement reward
 
-        # Reward aggression
-        reward += info.get("kills", 0) * 10
-        reward += info.get("damage_dealt", 0) * 0.5
-        reward += info.get("shot_fired", False) * 0.2
+        # === 4. Staying alive ===
+        if bot_info.get("alive", False):
+            reward += 1  # small reward for surviving each step
+        else:
+            if self.steps < 800:
+                reward -= 15  # punished for dying early
 
-        # Penalize cowardice
-        dist_to_enemy = math.dist(info.get("location", [0, 0]), info.get("closest_opponent", [0, 0]))
-        reward -= max(0, dist_to_enemy - 200) * 0.001  # Penalize being far away
+        # === 5. Ammo-based shooting logic ===
+        if bot_info.get("shot_fired", False):
+            if delta_damage <= 0:
+                reward -= 2  # penalty for shooting but not hitting anything
+            else:
+                reward += 1  # bonus for meaningful shots
 
-        # Encourage moving (avoid camping)
-        reward += info.get("meters_moved", 0) * 0.05
+        # === 6. Bonus for being near cover while under attack ===
+        if bot_info.get("health", 100) < self.last_health.get(bot_username, 100):
+            for ray in bot_info.get("rays", []):
+                if ray[2] == "object" and ray[1] < 150:
+                    reward += 2  # reward for being near cover when damaged
+                    break
 
-        # Penalize wasting shots
-        if info.get("shot_fired", False) and info.get("current_ammo", 0) == 0:
-            reward -= 0.5
+        # Track health for damage-based cover bonus
+        self.last_health[bot_username] = bot_info.get("health", 100)
 
         return reward
+    
