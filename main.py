@@ -141,7 +141,7 @@ def main():
         {"n_obstacles": 20, "duration": 300}
     ]
 
-    training_mode = True
+    training_mode = False
 
     # --- create environment ---
     env = Env(

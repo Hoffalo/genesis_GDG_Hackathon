@@ -231,7 +231,289 @@ class AggressiveBot:
             self.last_state = state
             self.last_action = action_index
             return action_dict
+        
+
 
         except Exception as e:
             print(f"AggressiveBot Act Error: {e}")
             return {"forward": False, "right": False, "down": False, "left": False, "rotate": 0, "shoot": False}
+        
+    def reset_for_new_episode(self):
+        """Reset episode-specific variables for a new episode"""
+        self.time_alive = 0
+        self.time_since_last_shot = 0
+        # Reset exploration tracking for curriculum learning
+        if self.steps > 1000000:  # Advanced stage - reduce exploration bonus
+            self.exploration_bonus = 0.05
+        elif self.steps > 500000:  # Intermediate stage
+            self.exploration_bonus = 0.08
+        # Keep initial exploration bonus for early training
+        
+    def remember(self, reward, next_info, done):
+        try:
+            next_state = self.normalize_state(next_info)
+            
+            if self.last_state is None or next_state is None:
+                print("Skipping bad experience (state was None)")
+                return
+
+            # Calculate exploration bonus based on position novelty
+            pos_x = int(next_state['location'][0].item() * self.position_resolution)
+            pos_y = int(next_state['location'][1].item() * self.position_resolution)
+            grid_pos = (pos_x, pos_y)
+
+            # Add exploration bonus for less visited areas
+            exploration_bonus = 0
+            if grid_pos in self.visited_positions:
+                self.visited_positions[grid_pos] += 1
+                visit_count = self.visited_positions[grid_pos]
+                exploration_bonus = self.exploration_bonus / math.sqrt(visit_count)
+            else:
+                self.visited_positions[grid_pos] = 1
+                exploration_bonus = self.exploration_bonus
+
+            # Add exploration bonus to the reward
+            reward += exploration_bonus
+
+            # Standard experience memory for backward compatibility
+            self.memory.append((self.last_state, self.last_action, reward, next_state, done))
+
+            # Add to prioritized experience replay with max priority for new experiences
+            self.priority_memory.append((self.last_state, self.last_action, reward, next_state, done))
+            self.priority_probabilities.append(self.max_priority)
+
+            # Start training only when we have enough samples
+            if len(self.memory) >= self.min_memory_size and not self.training_started:
+                print(f"Starting training with {len(self.memory)} samples in memory")
+                self.training_started = True
+
+            # Increment step counter
+            self.steps += 1
+
+            # Perform learning step if we have enough samples and it's time to train
+            if self.training_started and self.steps % self.train_freq == 0:
+                self.prioritized_replay()
+
+                # Print training progress periodically
+                if self.steps % 1000 == 0:
+                    print(f"Step {self.steps}, epsilon: {self.epsilon:.4f}")
+
+            # Update target network periodically
+            if self.steps > 0 and self.steps % self.update_target_freq == 0:
+                self.target_model.load_state_dict(self.model.state_dict())
+                print(f"Updated target network at step {self.steps}")
+
+            # Reset time alive if episode is done
+            if done:
+                self.time_alive = 0
+
+        except Exception as e:
+            print(f"Error in remember: {e}")
+
+    def prioritized_replay(self):
+        """Prioritized experience replay implementation with Double DQN"""
+        if len(self.priority_memory) < self.batch_size:
+            return
+
+        try:
+            # Calculate sampling probabilities
+            priorities = np.array(self.priority_probabilities)
+            probs = priorities ** self.alpha
+            probs /= probs.sum()
+
+            # Sample batch according to priorities
+            indices = np.random.choice(len(self.priority_memory), self.batch_size, p=probs)
+
+            # Extract batch
+            batch = [self.priority_memory[idx] for idx in indices]
+
+            # Calculate importance sampling weights
+            self.beta = min(1.0, self.beta + self.beta_increment)  # Anneal beta
+            weights = (len(self.priority_memory) * probs[indices]) ** (-self.beta)
+            weights /= weights.max()  # Normalize
+            weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+
+            # Prepare batch data
+            states = {
+                'location': torch.stack([t[0]['location'] for t in batch]).to(self.device),
+                'status': torch.stack([t[0]['status'] for t in batch]).to(self.device),
+                'rays': torch.stack([t[0]['rays'] for t in batch]).to(self.device),
+                'relative_pos': torch.stack([t[0].get('relative_pos', torch.zeros(2)) for t in batch]).to(self.device),
+                'time_features': torch.stack([t[0].get('time_features', torch.zeros(2)) for t in batch]).to(self.device)
+            }
+
+            next_states = {
+                'location': torch.stack([t[3]['location'] for t in batch]).to(self.device),
+                'status': torch.stack([t[3]['status'] for t in batch]).to(self.device),
+                'rays': torch.stack([t[3]['rays'] for t in batch]).to(self.device),
+                'relative_pos': torch.stack([t[3].get('relative_pos', torch.zeros(2)) for t in batch]).to(self.device),
+                'time_features': torch.stack([t[3].get('time_features', torch.zeros(2)) for t in batch]).to(self.device)
+            }
+
+            actions = torch.tensor([t[1] for t in batch], dtype=torch.long).to(self.device)
+            rewards = torch.tensor([t[2] for t in batch], dtype=torch.float32).to(self.device)
+            dones = torch.tensor([t[4] for t in batch], dtype=torch.float32).to(self.device)
+
+            # Get current Q values
+            current_q_values = self.model(states).gather(1, actions.unsqueeze(1))
+
+            # Get next Q values with Double DQN
+            with torch.no_grad():
+                if self.use_double_dqn:
+                    # Double DQN: select action using policy network
+                    next_action_indices = self.model(next_states).max(1)[1].unsqueeze(1)
+                    # Evaluate using target network
+                    next_q_values = self.target_model(next_states).gather(1, next_action_indices).squeeze()
+                else:
+                    # Regular DQN: both select and evaluate using target network
+                    next_q_values = self.target_model(next_states).max(1)[0]
+
+                target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
+
+            # Compute TD errors for updating priorities
+            td_errors = torch.abs(current_q_values.squeeze() - target_q_values).detach().cpu().numpy()
+
+            # Update priorities
+            for idx, error in zip(indices, td_errors):
+                self.priority_probabilities[idx] = error + self.epsilon_pri
+                self.max_priority = max(self.max_priority, error + self.epsilon_pri)
+
+            # Compute weighted loss
+            loss = (weights * F.smooth_l1_loss(current_q_values.squeeze(), target_q_values, reduction='none')).mean()
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)  # Gradient clipping
+            self.optimizer.step()
+
+            # Decay epsilon
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
+        except Exception as e:
+            print(f"Error in prioritized_replay: {e}")
+            # Fall back to regular replay if there's an error
+            self.replay()
+
+    def replay(self):
+        """Regular replay function with Double DQN support"""
+        if len(self.memory) < self.batch_size:
+            return
+
+        try:
+            minibatch = random.sample(self.memory, self.batch_size)
+
+            # Prepare batch data
+            states = {
+                'location': torch.stack([t[0]['location'] for t in minibatch]).to(self.device),
+                'status': torch.stack([t[0]['status'] for t in minibatch]).to(self.device),
+                'rays': torch.stack([t[0]['rays'] for t in minibatch]).to(self.device),
+                'relative_pos': torch.stack([t[0].get('relative_pos', torch.zeros(2)) for t in minibatch]).to(self.device),
+                'time_features': torch.stack([t[0].get('time_features', torch.zeros(2)) for t in minibatch]).to(self.device)
+            }
+
+            next_states = {
+                'location': torch.stack([t[3]['location'] for t in minibatch]).to(self.device),
+                'status': torch.stack([t[3]['status'] for t in minibatch]).to(self.device),
+                'rays': torch.stack([t[3]['rays'] for t in minibatch]).to(self.device),
+                'relative_pos': torch.stack([t[3].get('relative_pos', torch.zeros(2)) for t in minibatch]).to(self.device),
+                'time_features': torch.stack([t[3].get('time_features', torch.zeros(2)) for t in minibatch]).to(self.device)
+            }
+
+            actions = torch.tensor([t[1] for t in minibatch], dtype=torch.long).to(self.device)
+            rewards = torch.tensor([t[2] for t in minibatch], dtype=torch.float32).to(self.device)
+            dones = torch.tensor([t[4] for t in minibatch], dtype=torch.float32).to(self.device)
+
+            # Get current Q values
+            current_q_values = self.model(states).gather(1, actions.unsqueeze(1))
+
+            # Get next Q values with Double DQN support
+            with torch.no_grad():
+                if self.use_double_dqn:
+                    # Double DQN: select action using policy network
+                    next_action_indices = self.model(next_states).max(1)[1].unsqueeze(1)
+                    # Evaluate using target network
+                    next_q_values = self.target_model(next_states).gather(1, next_action_indices).squeeze()
+                else:
+                    # Regular DQN: both select and evaluate using target network
+                    next_q_values = self.target_model(next_states).max(1)[0]
+
+                target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
+
+            # Compute loss and optimize
+            loss = F.smooth_l1_loss(current_q_values.squeeze(), target_q_values)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)  # Gradient clipping
+            self.optimizer.step()
+
+            # Decay epsilon
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
+        except Exception as e:
+            print(f"Error in replay: {e}")
+
+    def reset_for_new_episode(self):
+        """Reset episode-specific variables for a new episode"""
+        self.time_alive = 0
+        self.time_since_last_shot = 0
+        # Reset exploration tracking for curriculum learning
+        if self.steps > 1000000:  # Advanced stage - reduce exploration bonus
+            self.exploration_bonus = 0.05
+        elif self.steps > 500000:  # Intermediate stage
+            self.exploration_bonus = 0.08
+        # Keep initial exploration bonus for early training
+
+    def get_hyperparameters(self):
+        """Return current hyperparameters for logging and tuning"""
+        return {
+            "gamma": self.gamma,
+            "epsilon": self.epsilon,
+            "epsilon_decay": self.epsilon_decay,
+            "learning_rate": self.learning_rate,
+            "batch_size": self.batch_size,
+            "alpha": self.alpha,
+            "beta": self.beta,
+            "use_double_dqn": self.use_double_dqn,
+            "model_input_dim": 38,
+            "action_size": self.action_size,
+            "steps": self.steps,
+        }
+
+    def save_to_dict(self):
+        """Return a checkpoint dictionary of the entire training state."""
+        return {
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'epsilon': self.epsilon,
+            'steps': self.steps,
+            'hyperparameters': self.get_hyperparameters(),
+        }
+
+    def load_from_dict(self, checkpoint_dict, map_location=None):
+        """Load everything from an in-memory checkpoint dictionary."""
+        if map_location is None:
+            map_location = self.device
+
+        # First ensure everything is on CPU, then move to final device if needed
+        self.model.load_state_dict(checkpoint_dict['model_state_dict'])
+        try:
+            self.optimizer.load_state_dict(checkpoint_dict['optimizer_state_dict'])
+            if map_location != 'cpu':
+                for state in self.optimizer.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.to(map_location)
+        except Exception as e:
+            print(f"Warning: Could not load optimizer state: {e}")
+            print("Continuing with fresh optimizer but keeping model weights")
+
+        if not self.reset_epsilon:
+            self.epsilon = checkpoint_dict.get('epsilon', self.epsilon)
+        self.steps = checkpoint_dict.get('steps', 0)
+
+        # Move model and target model to final device
+        self.device = torch.device(map_location) if isinstance(map_location, str) else map_location
+        self.model = self.model.to(self.device)
+        self.target_model.load_state_dict(self.model.state_dict())
+        self.target_model = self.target_model.to(self.device)
